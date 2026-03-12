@@ -104,13 +104,34 @@ class Model:
                 return c
         return None
 
+    def _normalize_col_name(self, s):
+        """Lowercase, strip, remove spaces/underscores for flexible matching."""
+        if not s or not isinstance(s, str):
+            return ""
+        return str(s).strip().lower().replace(" ", "").replace("_", "")
+
+    def _find_column_flexible(self, df, *candidate_names):
+        """Return column key from df that matches any of the candidate names (case-insensitive, spaces/underscores ignored)."""
+        if df is None or df.empty:
+            return None
+        normalized_targets = {self._normalize_col_name(n): n for n in candidate_names if n}
+        for c in df.columns:
+            if not c:
+                continue
+            nc = self._normalize_col_name(c)
+            if nc in normalized_targets:
+                return c
+            if nc and any(nc == self._normalize_col_name(t) for t in candidate_names):
+                return c
+        return None
+
     def _get_methodology_columns(self, df):
         """Return (lossRateModelName_col, pdModelName_col, lgdModelName_col) for ref; any may be None."""
         if df is None or df.empty:
             return None, None, None
-        lr = self._find_column(df, "lossRateModelName")
-        pd = self._find_column(df, "pdModelName")
-        lgd = self._find_column(df, "lgdModelName")
+        lr = self._find_column_flexible(df, "lossRateModelName", "lossratemodelname")
+        pd = self._find_column_flexible(df, "pdModelName", "pdmodelname")
+        lgd = self._find_column_flexible(df, "lgdModelName", "lgdmodelname")
         return lr, pd, lgd
 
     def _methodology_from_row(self, row, lr_col, pd_col, lgd_col):
@@ -475,7 +496,7 @@ class Model:
 
         segment_methodology = []
         if df_ref_current is not None and not df_ref_current.empty:
-            port_col = self._find_column(df_ref_current, "portfolioIdentifier")
+            port_col = self._find_column_flexible(df_ref_current, "portfolioIdentifier", "portfolioidentifier")
             lr_col, pd_col, lgd_col = self._get_methodology_columns(df_ref_current)
             model_cols = [c for c in (lr_col, pd_col, lgd_col) if c is not None]
             if port_col:
