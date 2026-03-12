@@ -146,11 +146,10 @@ class IOSession :
             print("[create_io_directories] callback: analysisIds count={}".format(len(analysis_ids)))
             local_directories['inputPaths'] = {}
             for file1, inputs in self.model_run_parameters.settings['inputPaths'].items() :
-                # print(file1)
                 analysis_path = []
-                for elem in inputs :
-                    # print(elem)
-                    an_id = elem.split('/')[1]
+                for idx, elem in enumerate(inputs):
+                    # Use analysisIds by index so each analysis gets its own dir (elem path may be "output/.../analysisidentifier=4647997/..." where [1] is "instrumentResult", not the id)
+                    an_id = analysis_ids[idx] if idx < len(analysis_ids) else elem.split('/')[1]
                     path1 = self.initializeDirectory(f'{self.local_temp_directory}/inputPaths/{an_id}/{file1}')
                     analysis_path.append(path1)
                 local_directories['inputPaths'].update({file1 : analysis_path})

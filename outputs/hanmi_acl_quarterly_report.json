@@ -1,0 +1,32 @@
+{
+  "reportMetadata": {
+    "reportTitle": "Allowance for Credit Losses \u2013 Quarterly Analysis and Supplemental Exhibits",
+    "currentAnalysisId": 4647997,
+    "priorAnalysisId": 4647909,
+    "priorYearAnalysisId": null,
+    "quartersAnalysisIds": []
+  },
+  "segmentMethodology": [],
+  "collectivelyEvaluatedByMethodology": [],
+  "quantitativeLossRatesBySegment": {
+    "main": [],
+    "creSubSegments": []
+  },
+  "netChargeOffsQuarterly": [
+    {
+      "segment": "US South Regional Bank Demo (ISv2)",
+      "analysisId": 4647997,
+      "netChargeOffs": 12056025.0
+    }
+  ],
+  "qualitativeReservesBySegment": {
+    "main": []
+  },
+  "macroeconomicBaseline": [],
+  "individualAnalysis": [],
+  "unfundedBySegment": [],
+  "unfundedTrend": [],
+  "parametersInventory": {},
+  "peerRatios": {},
+  "hanmiSummaryMetrics": {}
+}

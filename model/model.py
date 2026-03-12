@@ -137,8 +137,10 @@ class Model:
             return None
         if idx >= len(input_paths):
             return None
-        files = glob.glob(os.path.join(input_paths[idx], "**", "*.parquet"), recursive=True)
+        load_dir = input_paths[idx]
+        files = glob.glob(os.path.join(load_dir, "**", "*.parquet"), recursive=True)
         if not files:
+            print("[_load_parquet] no parquet files in {} (category={}, analysisId={})".format(load_dir, category, analysis_id))
             return None
         dfs = []
         for f in files:

@@ -1,0 +1,48 @@
+{
+  "currentAnalysisId": 4647997,
+  "priorAnalysisId": 4647909,
+  "sections": [
+    {
+      "type": "changesToAcl",
+      "beginningACL": 0.0,
+      "chargeOffs": 9435150.0,
+      "recoveries": 2620875.0,
+      "provision": -54001958.51340491,
+      "endingACL": 0.0
+    },
+    {
+      "type": "collectivelyEvaluated",
+      "collectivelyEvaluatedExposure": 0.0,
+      "quantitativeReserveAmount": 0.0,
+      "qualitativeReserveAmount": 0.0,
+      "totalCollectiveReserveAmount": 0.0,
+      "quantitativeReserveToExposure": null,
+      "qualitativeReserveToExposure": null,
+      "totalCollectiveReserveToExposure": null
+    },
+    {
+      "type": "individuallyEvaluated",
+      "individuallyEvaluatedExposure": 0.0,
+      "individualReserveAmount": 0.0,
+      "individualReserveToExposure": null
+    },
+    {
+      "type": "totalReserveRequirements",
+      "totalExposure": 0.0,
+      "totalReserves": 0.0,
+      "totalReservesToTotalExposure": null
+    },
+    {
+      "type": "unfundedCommitmentLiabilities",
+      "unfundedExposure": 0.0,
+      "unfundedReserveAmount": 0.0,
+      "totalUnfundedExposure": 0.0
+    },
+    {
+      "type": "qtdCreditLossExpense",
+      "provisionExpense": 0.0,
+      "unfundedProvisionExpense": 0.0,
+      "totalQtdCreditLossExpense": 0.0
+    }
+  ]
+}
