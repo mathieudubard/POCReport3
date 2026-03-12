@@ -1,0 +1,143 @@
+{
+	"model": {
+		"name": "IS Reports Extractor",
+		"apiType": "ManagedBatch",
+		"applicationConsumers": [
+			"ImpairmentStudio"
+		],
+		"settings": {
+			"description": "IS Reports Extractor",
+			"outputTypes": [
+				"Report"
+			],
+			"outputFrequency": "Annual",
+			"isConditional": false,
+			"projectName": "Report_Generator"
+		},
+		"permission": {
+			"licenses": [
+				"Application/ImpairmentStudio"
+			],
+			"permissionedTenants": [
+				
+			]
+		}
+	},
+	"version": {
+		"name": "0.1",
+		"validationStatus": "Draft",
+		"validUntil": "2026-01-02",
+		"url": "{DOMINO_WORKSPACE_URL}/mdy_md_isReportsExtract",
+		"accessKey": "{DOMINO_ACCESS_KEY}",
+		"mainFile": "/repos/model-report-generator/model/run.py",
+		"isActive": true,
+		"isLatest": true,
+		"datasets": {
+			"inputData": [
+				{
+					"category": "instrumentReference",
+					"attributes": [
+						"instrumentidentifier",
+						"borrowerState",
+						"ttcannualizedpdoneyear",
+						"ttcannualizedpdfiveyear",
+						"privatefirmmodelname",
+						"moodysindustrysector",
+						"primaryindustrynaics",
+						"riskcalcregion",
+						"geographycode",
+						"reportingdate"
+					]
+				},
+				{
+					"category": "instrumentCashFlow",
+					"attributes": [
+						"reportingdate",
+						"scenarioidentifier",
+						"instrumentidentifier",
+						"portfolioidentifier",
+						"asofdate",
+						"inputscenarioidentifier",
+						"cashflowdate",
+						"beginningunpaidprincipalbalance",
+						"principalpayment",
+						"interestpayment",
+						"unpaidprincipalbalanceadjustedforprepaymentanddefault",
+						"principalpaymentadjustedforprepaymentanddefault",
+						"interestpaymentadjustedforprepaymentanddefault",
+						"lossamount",
+						"interestlossamount",
+						"couponrate",
+						"unpaidprincipalbalanceadjustedforprepayment",
+						"principalpaymentadjustedforprepayment",
+						"interestpaymentadjustedforprepayment"
+					]
+				},
+				{
+					"category": "instrumentResult",
+					"attributes": [
+						"scenarioIdentifier",
+						"instrumentIdentifier",
+						"reportingDate",
+						"portfolioIdentifier",
+						"lossAmountRemaining",
+						"interestLossAmountRemaining"
+					]
+				}
+			],
+			"supportingData": [
+				{
+					"category": "macroeconomicVariableInput",
+					"attributes": [
+						"valueDate",
+						"dataBuffetMnemonic",
+						"macroeconomicVariableValue",
+						"asOfDate",
+						"importSource",
+						"macroeconomicVariableName",
+						"scenarioIdentifier",
+						"tenantIdentifier"
+					]
+				}
+			],
+			"outputData": [
+				{
+					"category": "instrumentRiskMetric",
+					"attributes": [
+						"instrumentIdentifier",
+						"scenarioIdentifier",
+						"modelName",
+						"modelOutput",
+						"asOfDate",
+						"term",
+						"lgd"
+					]
+				},
+				{
+					"category": "report",
+					"attributes": [
+						"instrumentIdentifier",
+						"scenarioIdentifier",
+						"modelName",
+						"modelOutput",
+						"asOfDate",
+						"term",
+						"lgd"
+					]
+				}
+			],
+			"settings": [
+				"runDate",
+				"reportingDate",
+				"scenarios",
+				"modelAsOfDate",
+				"settingsCallbackUrl"
+			],
+			"modelFactors": [
+				"FLBRQ.INLD"
+			],
+			"supportBuiltInScenario": true,
+			"supportCustomScenario": true
+		}
+	}
+}

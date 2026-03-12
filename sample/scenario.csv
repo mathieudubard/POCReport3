@@ -1,0 +1,54 @@
+scenarioIdentifier,scenarioDescription,importSource,tenantIdentifier
+0,Unconditioned,Moody's Analytics,moodys
+Summary,Weighted average,Moody's Analytics,moodys
+BASE,MEDC Baseline Scenario,Moody's Analytics DataBuffet,moodys
+CF,MEDC Consensus Scenario,Moody's Analytics DataBuffet,moodys
+CS,MEDC Constant Severity Scenario,Moody's Analytics DataBuffet,moodys
+S0,MEDC Alternative Scenario 0 - Upside - 4th Percentile,Moody's Analytics DataBuffet,moodys
+S1,MEDC Alternative Scenario 1 - Upside - 10th Percentile,Moody's Analytics DataBuffet,moodys
+S2,MEDC Alternative Scenario 2 - Downside - 75th Percentile,Moody's Analytics DataBuffet,moodys
+S3,MEDC Alternative Scenario 3 - Downside - 90th Percentile,Moody's Analytics DataBuffet,moodys
+S4,MEDC Alternative Scenario 4 - Downside - 96th Percentile,Moody's Analytics DataBuffet,moodys
+S5,MEDC Slower-Trend Growth Scenario,Moody's Analytics DataBuffet,moodys
+S6,MEDC Stagflation Scenario,Moody's Analytics DataBuffet,moodys
+S7,MEDC Next-Cycle Recession Scenario,Moody's Analytics DataBuffet,moodys
+S8,MEDC Low Oil Price Scenario,Moody's Analytics DataBuffet,moodys
+CCAR Baseline,CCAR Baseline,Moody's Analytics,moodys
+CCAR Adverse,CCAR Adverse,Moody's Analytics,moodys
+CCAR Severely Adverse,CCAR Severely Adverse,Moody's Analytics,moodys
+FEDB,MEDC FRB CCAR - Baseline,Moody's Analytics DataBuffet,moodys
+FEDM,MEDC FRB CCAR - Adverse,Moody's Analytics DataBuffet,moodys
+FEDS,MEDC FRB CCAR - Severely Adverse,Moody's Analytics DataBuffet,moodys
+FEDU,FRB Sensitivity Analysis - U-Shaped Alternative Downside Scenario,Moody's Analytics DataBuffet,moodys
+FEDV,FRB Sensitivity Analysis - V-Shaped Alternative Downside Scenario,Moody's Analytics DataBuffet,moodys
+FEDW,FRB Sensitivity Analysis - W-Shaped Alternative Downside Scenario,Moody's Analytics DataBuffet,moodys
+COVID19_BL,MEDC COVID-19 Baseline,Moody's Analytics DataBuffet,moodys
+COVID19_DS,MEDC COVID-19 Modest Pandemic (Downside),Moody's Analytics DataBuffet,moodys
+COVID19_PD,MEDC COVID-19 Severe Pandemic (Pandemic),Moody's Analytics DataBuffet,moodys
+COVID19_CP,MEDC COVID-19 Critical Pandemic,Moody's Analytics DataBuffet,moodys
+BASE_Modified2020Q2,MEDC Baseline Scenario with Modified 2020Q2 value,Moody's Analytics,moodys
+CF_Modified2020Q2,MEDC Consensus Scenario with Modified 2020Q2 value,Moody's Analytics,moodys
+S0_Modified2020Q2,MEDC Alternative Scenario 0 - Upside - 4th Percentile with Modified 2020Q2 value,Moody's Analytics,moodys
+S1_Modified2020Q2,MEDC Alternative Scenario 1 - Upside - 10th Percentile with Modified 2020Q2 value,Moody's Analytics,moodys
+S2_Modified2020Q2,MEDC Alternative Scenario 2 - Downside - 75th Percentile with Modified 2020Q2 value,Moody's Analytics,moodys
+S3_Modified2020Q2,MEDC Alternative Scenario 3 - Downside - 90th Percentile with Modified 2020Q2 value,Moody's Analytics,moodys
+S4_Modified2020Q2,MEDC Alternative Scenario 4 - Downside - 96th Percentile with Modified 2020Q2 value,Moody's Analytics,moodys
+S5_Modified2020Q2,MEDC Slower-Trend Growth Scenario with Modified 2020Q2 value,Moody's Analytics,moodys
+S6_Modified2020Q2,MEDC Stagflation Scenario with Modified 2020Q2 value,Moody's Analytics,moodys
+S7_Modified2020Q2,MEDC Next-Cycle Recession Scenario with Modified 2020Q2 value,Moody's Analytics,moodys
+S8_Modified2020Q2,MEDC Low Oil Price Scenario with Modified 2020Q2 value,Moody's Analytics,moodys
+IUKR_RR,Ukraine War - Rapid Resolution Scenario,Moody's Analytics DataBuffet,moodys
+IUKR_LC,Ukraine War - Lengthy Conflict Scenario,Moody's Analytics DataBuffet,moodys
+EBABL,European Banking Authority Baseline Scenario,Moody's Analytics DataBuffet,moodys
+EBAST,European Banking Authority Stress Scenario,Moody's Analytics DataBuffet,moodys
+LBC,MEDC Limited Bank Contagion (Baseline) Scenario,Moody's Analytics DataBuffet,moodys
+LIR,MEDC Crisis Continues On (Low Interest RatesI) Scenario,Moody's Analytics DataBuffet,moodys
+HIR,MEDC Inflation Trumps Financial Stability (High Interest Rates) Scenarios,Moody's Analytics DataBuffet,moodys
+CRE_DL,CRE Doom Loop Scenario,Moody's Analytics DataBuffet,moodys
+FEDXA,MEDC FRB CCAR - Exploratory Scenario A,Moody's Analytics DataBuffet,moodys
+FEDXB,MEDC FRB CCAR - Exploratory Scenario B,Moody's Analytics DataBuffet,moodys
+GTW_HT,Bookending the Global Trade War - High Tariffs,Moody's Analytics DataBuffet,moodys
+GTW_LT,Bookending the Global Trade War - Low Tariffs,Moody's Analytics DataBuffet,moodys
+GTW_NT,Bookending the Global Trade War - No Tariffs,Moody's Analytics DataBuffet,moodys
+FEDBP,MEDC FRB CCAR - Proposed Baseline,Moody's Analytics DataBuffet,moodys
+FEDSP,MEDC FRB CCAR - Proposed Severely Adverse,Moody's Analytics DataBuffet,moodys
