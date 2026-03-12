@@ -454,6 +454,29 @@ class IOSession :
             file_dicts.append(file_dict)
         return file_dicts if file_dicts != [{}] else []
 
+    def createOutputFileDicts(self, local_model_run_parameters_path=None):
+        """
+        Build a single dict of only output files to upload: all files under
+        outputPaths (e.g. report) plus localModelRunParameters.json.
+        Excludes inputPaths (downloaded parquet) so we do not upload inputs.
+        :param local_model_run_parameters_path: optional path to localModelRunParameters.json
+        :return: dict {file_name_wo_ext: file_path}
+        """
+        out = {}
+        output_paths = self.local_directories.get("outputPaths") or {}
+        for _key, dir_path in output_paths.items():
+            if not dir_path or not os.path.isdir(dir_path):
+                continue
+            dir_abs = os.path.abspath(dir_path).replace("\\", "/")
+            all_paths = gg(f'{dir_abs}{os.sep}**', recursive=True)
+            for path in all_paths:
+                if os.path.isfile(path):
+                    name = os.path.splitext(os.path.basename(path))[0]
+                    out[name] = os.path.abspath(path)
+        if local_model_run_parameters_path and os.path.isfile(local_model_run_parameters_path):
+            out["localModelRunParameters"] = os.path.abspath(local_model_run_parameters_path)
+        return out
+
     def getModelRunParameters(self, s3_json_key, credentials) :
         model_run_parameters_path = f'{self.local_temp_directory}/{os.path.basename(s3_json_key)}'
         if self.local_mode :
@@ -510,6 +533,53 @@ class IOSession :
         self.logger.info("Loaded analysis roles from %s: current=%s, prior=%s", found, data.get("current"), data.get("prior"))
         print("[getSourceInputFiles] Loaded analysis metadata from {}".format(os.path.basename(found)))
 
+    def _get_macro_scenario_date_from_analysis_details(self, report_dir, analysis_id):
+        """
+        Load analysisDetails_{id}.json from report_dir and return asOfDate for the BASE scenario
+        (scenarios[].name == "BASE" -> asOfDate). Returns YYYY-MM-DD string or None.
+        """
+        if not report_dir or not analysis_id:
+            return None
+        path = os.path.join(report_dir, "analysisDetails_{}.json".format(analysis_id))
+        if not os.path.isfile(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, JSONDecodeError):
+            return None
+        for s in (data.get("scenarios") or []):
+            if str(s.get("name")).strip().upper() == "BASE":
+                d = s.get("asOfDate")
+                if d:
+                    return self._normalize_date_for_path(d)
+        return None
+
+    def _get_reporting_date_from_analysis_details(self, report_dir, analysis_id):
+        """Return reportingDate from analysisDetails as YYYY-MM-DD or None."""
+        if not report_dir or not analysis_id:
+            return None
+        path = os.path.join(report_dir, "analysisDetails_{}.json".format(analysis_id))
+        if not os.path.isfile(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, JSONDecodeError):
+            return None
+        d = data.get("reportingDate")
+        return self._normalize_date_for_path(d) if d else None
+
+    def _normalize_date_for_path(self, value):
+        """Return date as YYYY-MM-DD for S3 path segment (asofdate=YYYY-MM-DD)."""
+        if not value:
+            return None
+        try:
+            dt = pd.to_datetime(value)
+            return dt.strftime("%Y-%m-%d")
+        except Exception:
+            return None
+
     def getSourceInputFiles(self) :
         print("[getSourceInputFiles] callBack={}".format(self.model_run_parameters.callBack))
         if self.model_run_parameters.callBack is True :
@@ -528,10 +598,9 @@ class IOSession :
                 self._list_s3_at_prefix(prefix, "output/.../analysisidentifier={}/{}/".format(aid, scenario))
                 # List and print object keys (files) found under this prefix
                 object_keys = self._get_s3_object_keys(prefix)
+                parquet_count = len([k for k in object_keys if k.endswith(".parquet")])
                 if object_keys:
-                    print("[getSourceInputFiles] Files found ({}):".format(len(object_keys)))
-                    for k in sorted(object_keys):
-                        print("  ", k)
+                    print("[getSourceInputFiles] instrumentResult analysisId={}: {} object(s), {} parquet".format(aid, len(object_keys), parquet_count))
                 else:
                     print("[getSourceInputFiles] No files under this path.")
 
@@ -606,27 +675,48 @@ class IOSession :
                     else:
                         self._downloadFile(s3_key, local_path)
 
-            # Download macroEconomicVariableInput from input root, Baseline scenario only (scenarioidentifier=BASE)
+            # Download macroEconomicVariableInput from input root: path uses asofdate from analysisDetails (main analysis) and scenarioidentifier=BASE
             macro_paths = source_input_directory.get("macroEconomicVariableInput") or []
-            base_macro = self.MACRO_SCENARIO_BASELINE
+            main_analysis_id = (self.model_run_parameters.settings.get("analysisRoles") or {}).get("current")
+            if main_analysis_id is None and analysis_ids:
+                main_analysis_id = analysis_ids[0]
+            scenario_asof_date = self._get_macro_scenario_date_from_analysis_details(report_dir, main_analysis_id)
+            if scenario_asof_date:
+                print("[getSourceInputFiles] macroEconomicVariableInput: using asofdate={} from analysisDetails (main analysisId={})".format(
+                    scenario_asof_date, main_analysis_id))
+            else:
+                print("[getSourceInputFiles] macroEconomicVariableInput: no asOfDate from analysisDetails (BASE scenario or reportingDate); will try default path")
             for idx, aid in enumerate(analysis_ids or []):
                 if idx >= len(macro_paths):
                     break
                 local_dir = macro_paths[idx]
                 os.makedirs(local_dir, exist_ok=True)
-                prefix = "{}/macroEconomicVariableInput/analysisidentifier={}/scenarioidentifier={}/".format(
-                    self.INPUT_ROOT_BASE, aid, base_macro
-                )
                 if not self.local_mode:
-                    keys = self._get_s3_object_keys(prefix)
-                    parquet_keys = [k for k in keys if k.endswith(".parquet")]
-                    if parquet_keys:
-                        print("[getSourceInputFiles] macroEconomicVariableInput (Baseline) analysisidentifier={}: downloading {} file(s)".format(aid, len(parquet_keys)))
-                    else:
-                        print("[getSourceInputFiles] macroEconomicVariableInput (Baseline) analysisidentifier={}: no parquet files at prefix {}".format(aid, prefix))
-                    for s3_key in parquet_keys:
-                        local_path = os.path.join(local_dir, os.path.basename(s3_key))
-                        self._downloadFile(s3_key, local_path)
+                    # Path: input/macroeconomicVariableInput/asofdate=YYYY-MM-DD/scenarioidentifier=BASE/
+                    cat_folder = "macroeconomicVariableInput"
+                    try_date_used = scenario_asof_date
+                    if not try_date_used:
+                        try_date_used = self._get_reporting_date_from_analysis_details(report_dir, main_analysis_id or aid)
+                    parquet_keys = []
+                    for try_date in (try_date_used, None):
+                        if try_date:
+                            prefix = "{}/{}/asofdate={}/scenarioidentifier={}/".format(
+                                self.INPUT_ROOT_BASE, cat_folder, try_date, self.MACRO_SCENARIO_BASELINE)
+                        else:
+                            # Fallback: no asofdate segment (legacy)
+                            prefix = "{}/{}/analysisidentifier={}/scenarioidentifier={}/".format(
+                                self.INPUT_ROOT_BASE, "macroEconomicVariableInput", aid, self.MACRO_SCENARIO_BASELINE)
+                        keys = self._get_s3_object_keys(prefix)
+                        parquet_keys = [k for k in keys if k.endswith(".parquet")]
+                        if parquet_keys:
+                            print("[getSourceInputFiles] macroEconomicVariableInput asofdate={} scenario=BASE: downloading {} parquet file(s) -> analysisId={}".format(
+                                try_date or "n/a", len(parquet_keys), aid))
+                            for s3_key in parquet_keys:
+                                local_path = os.path.join(local_dir, os.path.basename(s3_key))
+                                self._downloadFile(s3_key, local_path)
+                            break
+                    if not parquet_keys:
+                        print("[getSourceInputFiles] macroEconomicVariableInput: no parquet at input/.../asofdate=.../scenarioidentifier=BASE/ (check analysisDetails.scenarios BASE.asOfDate)")
                 else:
                     # Local mode: copy from test folder if present (same prefix structure under test input path)
                     pass
@@ -683,7 +773,9 @@ class IOSession :
         return input_files
 
     def uploadFiles(self, files, scenario_name=None) :
-        print("[uploadFiles] uploading {} file(s): {}".format(len(files), list(files.keys())))
+        n = len(files)
+        keys = list(files.keys())
+        print("[uploadFiles] uploading {} file(s) to S3{}".format(n, ": " + ", ".join(keys) if n <= 10 else ""))
         for file, file_path in files.items() :
             ext = os.path.splitext(file_path)[1]
             out_path = self.model_run_parameters.output_s3_paths.get(file)

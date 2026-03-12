@@ -52,10 +52,10 @@ class Model:
         print(f"[Model run] Local MRP written to: {new_mrp}")
 
         print("[Model run] Step 6: Create file dicts and upload outputs to S3")
-        all_files = self.io_session.createFileDicts(self.io_session.local_temp_directory)
-        print(f"[Model run] Found {len(all_files)} file(s) to upload")
-        for file_dict in all_files:
-            self.io_session.uploadFiles(file_dict)
+        all_files = self.io_session.createOutputFileDicts(new_mrp)
+        print("[Model run] Uploading {} output file(s): {}".format(len(all_files), list(all_files.keys())))
+        if all_files:
+            self.io_session.uploadFiles(all_files)
         print("[Model run] END")
 
     def sortOutInstrumentReferences(self, all_files):
@@ -131,11 +131,13 @@ class Model:
         io = self.io_session
         input_paths = (io.local_directories.get("inputPaths") or {}).get(category) or []
         analysis_ids = io.model_run_parameters.settings.get("analysisIds", []) or []
-        try:
-            idx = analysis_ids.index(analysis_id)
-        except ValueError:
-            return None
-        if idx >= len(input_paths):
+        # Match by string so 4647997 and "4647997" both work (JSON/callback may use either)
+        idx = None
+        for i, aid in enumerate(analysis_ids):
+            if str(aid) == str(analysis_id):
+                idx = i
+                break
+        if idx is None or idx >= len(input_paths):
             return None
         load_dir = input_paths[idx]
         files = glob.glob(os.path.join(load_dir, "**", "*.parquet"), recursive=True)
@@ -151,7 +153,11 @@ class Model:
         if not dfs:
             return None
         out = pd.concat(dfs, ignore_index=True)
-        return self._filter_summary_scenario(out) if filter_summary else out
+        if filter_summary:
+            out = self._filter_summary_scenario(out)
+        print("[_load_parquet] {} analysisId={}: {} files -> {} rows".format(
+            category, analysis_id, len(files), len(out)))
+        return out
 
     def build_quarterly_summary_report(self):
         """

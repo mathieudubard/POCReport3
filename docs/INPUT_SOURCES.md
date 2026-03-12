@@ -27,11 +27,12 @@ Short reference for the **optional analysis metadata** and **macroEconomicVariab
 ## 2. macroEconomicVariableInput (Baseline)
 
 - **Category:** **macroEconomicVariableInput**
-- **Root:** **input** (not `output/` or `export/`). So full path is under bucket **input/**.
-- **Partitioning:** By **scenarioIdentifier** – subfolders like `scenarioidentifier=BASE/` (or the exact partition key used by the platform).
-- **Filter:** Use **Baseline** scenario only. In `sample/scenario.csv`, Baseline = **BASE** (`scenarioIdentifier = "BASE"`).
-- **Attributes:** At least `analysisIdentifier`, `scenarioIdentifier`, `macroeconomicVariableName`, `valueDate`, `macroeconomicVariableValue`. Optional: `asOfDate`, `databuffetMnemonic`, etc. (see datamodel).
-- **Variable names:** Resolve report labels (e.g. “Unemployment Rate”, “USA Real GDP Growth”) using `sample/macroeconomicVariable.csv` (column `macroeconomicVariableName` and any mnemonic columns).
+- **Root:** **input** (not `output/` or `export/`). Full path uses **asOfDate** from the main analysis’s **analysisDetails** and **scenarioidentifier=BASE**.
+- **Path:** `input/macroeconomicVariableInput/asofdate=YYYY-MM-DD/scenarioidentifier=BASE/`
+  - **asOfDate** is taken from the **BASE** scenario in **analysisDetails** for the main (current) analysis: `analysisDetails.scenarios[]` where `name === "BASE"` → use `asOfDate`. See `sample/analysisDetails.json`. If missing, fallback to `analysisDetails.reportingDate`, then legacy path without asofdate.
+- **Filter:** Use **Baseline** scenario only (`scenarioidentifier=BASE`).
+- **Attributes:** At least `macroeconomicVariableName`, `valueDate`, `macroeconomicVariableValue`. Optional: `asOfDate`, `databuffetMnemonic`, etc. (see datamodel).
+- **Variable names:** Resolve report labels via `sample/macroeconomicVariable.csv` (column `macroeconomicVariableName` and any mnemonic columns).
 
 ---
 
@@ -43,7 +44,7 @@ Short reference for the **optional analysis metadata** and **macroEconomicVariab
 | instrumentReporting | output | `output/instrumentReporting/analysisidentifier={id}/` |
 | instrumentReference | output | `output/instrumentReference/analysisidentifier={id}/` |
 | analysisDetails | export | `export/analysisidentifier={id}/analysisDetails.json` |
-| **macroEconomicVariableInput** | **input** | `input/macroEconomicVariableInput/.../scenarioidentifier=BASE/` (exact partition structure TBD from platform) |
+| **macroEconomicVariableInput** | **input** | `input/macroeconomicVariableInput/asofdate=YYYY-MM-DD/scenarioidentifier=BASE/` (date from analysisDetails main analysis, BASE scenario) |
 | Optional payload (e.g. metadata) | execution inputPath | As today: list/download under `settings.inputPath`; optional (empty = no failure). |
 
 ---

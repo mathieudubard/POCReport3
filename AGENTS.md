@@ -19,7 +19,7 @@ Compact context for agents. See README.md for full project layout.
    - **instrumentResult:** `output/instrumentResult/analysisidentifier={id}/scenarioidentifier=Summary/` (parquet under that prefix, e.g. `.../adjusted=true/*.snappy.parquet`).
    - **instrumentReporting:** `output/instrumentReporting/analysisidentifier={id}/` — parquet files directly under that prefix (no extra partition).
    - **instrumentReference:** `output/instrumentReference/analysisidentifier={id}/` — partitioned by portfolio; all parquet from all subfolders are downloaded (subfolder structure preserved locally to avoid overwrites).
-   - **macroEconomicVariableInput:** `input/macroEconomicVariableInput/analysisidentifier={id}/scenarioidentifier=BASE/` — Baseline scenario only; downloaded when callback is True.
+   - **macroEconomicVariableInput:** `input/macroeconomicVariableInput/asofdate=YYYY-MM-DD/scenarioidentifier=BASE/` — asOfDate from main analysis’s analysisDetails (BASE scenario); downloaded when callback is True.
 
 2. **Callback mode**  
    When `settingsCallbackUrl` is present in the run parameters, the callback is run (no need for `settingsCallbackUrl` in `datasets.settings`). That populates `inputPaths` and `analysisIds`.
@@ -89,6 +89,6 @@ Compact context for agents. See README.md for full project layout.
 
 - **Target report:** Hanmi3 Q4 2025 ACL Quarterly Analysis and Supplemental Exhibits. Full mapping and JSON section contract: **`docs/REPORT_MAPPING.md`**.
 - **Optional analysis metadata:** Input file (e.g. under `inputPath`) may define which analysis is current, prior, prior year, and quarters; see **`docs/INPUT_SOURCES.md`**.
-- **macroEconomicVariableInput:** To be read from bucket **`input/`** root (not output/export), partitioned by **scenarioIdentifier**; use **Baseline** (BASE) only for macro tables; variable names from **`sample/macroeconomicVariable.csv`**. Scenarios: **`sample/scenario.csv`**.
+- **macroEconomicVariableInput:** Path `input/macroeconomicVariableInput/asofdate=YYYY-MM-DD/scenarioidentifier=BASE/`; **asOfDate** from **analysisDetails** for main analysis (current): `scenarios[].name === "BASE"` → `asOfDate` (see `sample/analysisDetails.json`). Variable names from **`sample/macroeconomicVariable.csv`**.
 - **Report logic:** instrumentResult filtered to **Summary** scenario only (already done via `_load_parquet_for_analysis(..., filter_summary=True)`). Joins: result/reporting to instrumentReference on **instrumentIdentifier**. Attribute precedence: reporting > result > reference.
 - **Implementation phases:** **`docs/IMPLEMENTATION_PLAN.md`** (metadata, macro input, new report sections, tests).
