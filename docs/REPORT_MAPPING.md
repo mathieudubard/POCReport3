@@ -42,6 +42,8 @@ This document maps the **Hanmi3 Q4 2025 ACL Quarterly Analysis and SuppExh** rep
 
 Output: time series by **valueDate** (and optionally scenario) for each variable, for the Baseline scenario only.
 
+**Implementation:** The report builder loads macro data from Baseline, then filters to **only** the variables in the table above (see `REPORT_MACRO_VARIABLE_NAMES` in `model/model.py`) and to **valueDate** within **4 quarters back and 4 quarters forward** of the current analysis’s `reportingDate` from analysisDetails. No other variables or dates are included in the report.
+
 ---
 
 ## 4. Report sections and table mappings

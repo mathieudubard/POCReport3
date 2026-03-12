@@ -9,6 +9,20 @@ import zipfile
 
 DEFAULT_SETTINGS = ['inputFileName', 'outputFormat', 'outputPaths', 'inputPath', 'logPath']
 
+# Macro variables and date range for Hanmi report only (REPORT_MAPPING.md §3: 4-quarter historical + 4-quarter forecast)
+REPORT_MACRO_VARIABLE_NAMES = [
+    "USA Unemployment Rate",
+    "USA Unemployment Rate Monthly",
+    "USA Real GDP Growth",
+    "USA BBB Spread",
+    "US Treasury 3 Year",
+    "USA CRE Price Index Growth",
+    "USA House Price Index FHFA",
+    "USA Retail Sales and Food Services Growth",
+]
+REPORT_MACRO_QUARTERS_BACK = 4
+REPORT_MACRO_QUARTERS_FORWARD = 4
+
 class Model:
     """
     Main model class.
@@ -157,6 +171,59 @@ class Model:
             out = self._filter_summary_scenario(out)
         print("[_load_parquet] {} analysisId={}: {} files -> {} rows".format(
             category, analysis_id, len(files), len(out)))
+        return out
+
+    def _get_reporting_date_from_analysis_details(self, report_dir, analysis_id):
+        """Return reportingDate from report_dir/analysisDetails_{id}.json as datetime or None."""
+        if not report_dir or not analysis_id:
+            return None
+        path = os.path.join(report_dir, "analysisDetails_{}.json".format(analysis_id))
+        if not os.path.isfile(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return None
+        d = data.get("reportingDate")
+        if not d:
+            return None
+        try:
+            return pd.to_datetime(d)
+        except Exception:
+            return None
+
+    def _filter_macro_for_report(self, df_macro, report_dir, current_id):
+        """
+        Filter macro DataFrame to only variables and valueDates needed for the report.
+        Variables: REPORT_MACRO_VARIABLE_NAMES. Dates: reportingDate ± REPORT_MACRO_QUARTERS_BACK/FORWARD.
+        """
+        if df_macro is None or df_macro.empty:
+            return df_macro
+        name_col = self._find_column(df_macro, "macroeconomicVariableName")
+        date_col = self._find_column(df_macro, "valueDate")
+        if not name_col:
+            return df_macro
+        # Filter to report variables only (case-insensitive match to allowed names)
+        allowed = {s.strip().lower() for s in REPORT_MACRO_VARIABLE_NAMES}
+        mask_name = df_macro[name_col].astype(str).str.strip().str.lower().isin(allowed)
+        out = df_macro.loc[mask_name].copy()
+        if out.empty:
+            print("[hanmi_acl_report] macro: filtered to report variables only -> 0 rows (allowed: {})".format(len(REPORT_MACRO_VARIABLE_NAMES)))
+            return out
+        if date_col:
+            center = self._get_reporting_date_from_analysis_details(report_dir, current_id)
+            if center is not None:
+                start = center - pd.DateOffset(months=3 * REPORT_MACRO_QUARTERS_BACK)
+                end = center + pd.DateOffset(months=3 * REPORT_MACRO_QUARTERS_FORWARD)
+                try:
+                    out["_valueDate_dt"] = pd.to_datetime(out[date_col], errors="coerce")
+                    out = out[out["_valueDate_dt"].notna() & (out["_valueDate_dt"] >= start) & (out["_valueDate_dt"] <= end)]
+                    out = out.drop(columns=["_valueDate_dt"], errors="ignore")
+                except Exception:
+                    pass
+        print("[hanmi_acl_report] macro: filtered to {} report variables, date range {}q back / {}q forward -> {} rows".format(
+            len(REPORT_MACRO_VARIABLE_NAMES), REPORT_MACRO_QUARTERS_BACK, REPORT_MACRO_QUARTERS_FORWARD, len(out)))
         return out
 
     def build_quarterly_summary_report(self):
@@ -331,10 +398,27 @@ class Model:
         df_ref_current = self._load_parquet_for_analysis("instrumentReference", current_id)
         df_ref_prior = self._load_parquet_for_analysis("instrumentReference", prior_id) if prior_id else None
         df_macro = self._load_parquet_for_analysis("macroEconomicVariableInput", current_id) if current_id else None
+        if df_macro is not None and not df_macro.empty:
+            df_macro = self._filter_macro_for_report(df_macro, report_dir, current_id)
         print("[hanmi_acl_report] data loaded: result current={}, prior={}, reporting={}, ref={}, macro={}".format(
             len(df_current) if df_current is not None else 0, len(df_prior) if df_prior is not None else 0,
             len(df_reporting_current) if df_reporting_current is not None else 0,
             len(df_ref_current) if df_ref_current is not None else 0, len(df_macro) if df_macro is not None else 0))
+        # Debug: key columns and sample values to explain empty sections
+        if df_current is None or df_current.empty:
+            print("[hanmi_acl_report] result current: EMPTY or None -> segment/collective/quant/qual/individual/unfunded will be empty")
+        else:
+            id_c = self._find_column(df_current, "instrumentIdentifier")
+            print("[hanmi_acl_report] result current: rows={}, cols={}, instrumentId={}".format(
+                len(df_current), list(df_current.columns)[:15], "ok" if id_c else "MISSING"))
+        if df_ref_current is not None and not df_ref_current.empty:
+            port_c = self._find_column(df_ref_current, "portfolioIdentifier")
+            asc_c = self._find_column(df_ref_current, "ascImpairmentEvaluation")
+            model_c = self._find_column(df_ref_current, "lossRateModelName") or self._find_column(df_ref_current, "pdModelName")
+            uniq_asc = df_ref_current[asc_c].dropna().astype(str).unique().tolist()[:5] if asc_c else []
+            uniq_port = df_ref_current[port_c].dropna().astype(str).unique().tolist()[:5] if port_c else []
+            print("[hanmi_acl_report] ref current: portfolioIdentifier={}, ascImpairmentEvaluation={}, modelCol={}, sample asc={}, sample port={}".format(
+                "ok" if port_c else "MISSING", "ok" if asc_c else "MISSING", "ok" if model_c else "MISSING", uniq_asc, uniq_port))
 
         report_metadata = {
             "reportTitle": "Allowance for Credit Losses – Quarterly Analysis and Supplemental Exhibits",
@@ -349,10 +433,18 @@ class Model:
             port_col = self._find_column(df_ref_current, "portfolioIdentifier")
             model_col = self._find_column(df_ref_current, "lossRateModelName") or self._find_column(df_ref_current, "pdModelName")
             if port_col:
-                for _, row in df_ref_current[[port_col] + ([model_col] if model_col else [])].drop_duplicates().iterrows():
+                dup = df_ref_current[[port_col] + ([model_col] if model_col else [])].drop_duplicates()
+                for _, row in dup.iterrows():
                     seg = str(row[port_col]) if pd.notna(row[port_col]) else ""
                     meth = str(row[model_col]) if model_col and pd.notna(row.get(model_col)) else ""
                     segment_methodology.append({"segment": seg, "methodology": meth})
+                print("[hanmi_acl_report] segmentMethodology: ref rows={}, distinct (port+model)={}, output rows={}".format(
+                    len(df_ref_current), len(dup), len(segment_methodology)))
+            else:
+                print("[hanmi_acl_report] segmentMethodology: SKIP - portfolioIdentifier column not found in ref (cols: {})".format(
+                    list(df_ref_current.columns)[:12]))
+        else:
+            print("[hanmi_acl_report] segmentMethodology: SKIP - df_ref_current empty or None")
 
         collectively_by_methodology = []
         if df_current is not None and not df_current.empty and df_ref_current is not None and not df_ref_current.empty:
@@ -364,6 +456,8 @@ class Model:
                 ref_sub = df_ref_current[[id_ref, asc_col] + ([model_col] if model_col else [])].drop_duplicates()
                 merged = df_current.merge(ref_sub, left_on=id_res, right_on=id_ref, how="left")
                 collective = merged[merged[asc_col].astype(str).str.strip().str.lower().str.contains("collective", na=False)]
+                print("[hanmi_acl_report] collectivelyByMethodology: result={}, ref={}, merged={}, after collective filter={}, model_col={}".format(
+                    len(df_current), len(df_ref_current), len(merged), len(collective), "ok" if model_col else "MISSING"))
                 if not collective.empty and model_col:
                     adj_col = self._find_column(collective, "onBalanceSheetReserveAdjusted")
                     unadj_col = self._find_column(collective, "onBalanceSheetReserveUnadjusted")
@@ -385,6 +479,12 @@ class Model:
                     if total_coll_reserve:
                         for r in collectively_by_methodology:
                             r["pctOfEvaluationType"] = round(100.0 * r["totalReserve"] / total_coll_reserve, 2)
+            else:
+                print("[hanmi_acl_report] collectivelyByMethodology: SKIP - id_res={}, id_ref={}, asc_col={}".format(
+                    bool(id_res), bool(id_ref), bool(asc_col)))
+        else:
+            print("[hanmi_acl_report] collectivelyByMethodology: SKIP - result empty or ref empty (result={}, ref={})".format(
+                len(df_current) if df_current is not None else 0, len(df_ref_current) if df_ref_current is not None else 0))
 
         quantitative_by_segment = {"main": [], "creSubSegments": []}
         for analysis_id, label in [(current_id, "current"), (prior_id, "prior")]:
@@ -393,14 +493,20 @@ class Model:
             df_res = self._load_parquet_for_analysis("instrumentResult", analysis_id, filter_summary=True)
             df_ref = self._load_parquet_for_analysis("instrumentReference", analysis_id) if analysis_id else None
             if df_res is None or df_res.empty or df_ref is None or df_ref.empty:
+                print("[hanmi_acl_report] quantitativeLossRates: analysisId={} SKIP - result={}, ref={}".format(
+                    analysis_id, len(df_res) if df_res is not None else 0, len(df_ref) if df_ref is not None else 0))
                 continue
             id_res = self._find_column(df_res, "instrumentIdentifier")
             id_ref = self._find_column(df_ref, "instrumentIdentifier")
             port_ref = self._find_column(df_ref, "portfolioIdentifier")
             if not id_res or not id_ref or not port_ref:
+                print("[hanmi_acl_report] quantitativeLossRates: analysisId={} SKIP - id_res={}, id_ref={}, port_ref={}".format(
+                    analysis_id, bool(id_res), bool(id_ref), bool(port_ref)))
                 continue
             ref_sub = df_ref[[id_ref, port_ref]].drop_duplicates()
             merged = df_res.merge(ref_sub, left_on=id_res, right_on=id_ref, how="left")
+            print("[hanmi_acl_report] quantitativeLossRates: analysisId={} result={}, ref={}, merged={}, groups={}".format(
+                analysis_id, len(df_res), len(df_ref), len(merged), merged[port_ref].nunique() if port_ref in merged.columns else 0))
             ac_col = self._find_column(merged, "amortizedCost")
             quant_col = self._find_column(merged, "onBalanceSheetReserveUnadjusted")
             for portfolio, grp in merged.groupby(port_ref, dropna=False):
@@ -447,6 +553,8 @@ class Model:
                 adj_col = self._find_column(merged, "onBalanceSheetReserveAdjusted")
                 unadj_col = self._find_column(merged, "onBalanceSheetReserveUnadjusted")
                 ac_col = self._find_column(merged, "amortizedCost")
+                print("[hanmi_acl_report] qualitativeReserves: merged={}, adj_col={}, unadj_col={}".format(
+                    len(merged), bool(adj_col), bool(unadj_col)))
                 for portfolio, grp in merged.groupby(port_ref, dropna=False):
                     qual = (grp[adj_col].sum() - grp[unadj_col].sum()) if (adj_col and unadj_col) else 0.0
                     ac = self._safe_sum(grp, "amortizedCost") if ac_col else 0.0
@@ -456,6 +564,11 @@ class Model:
                         "qualitativeReserve": round(qual, 2),
                         "qualitativeRatePct": round(rate, 4) if rate is not None else None,
                     })
+            else:
+                print("[hanmi_acl_report] qualitativeReserves: SKIP - id_res={}, id_ref={}, port_ref={}".format(
+                    bool(id_res), bool(id_ref), bool(port_ref)))
+        else:
+            print("[hanmi_acl_report] qualitativeReserves: SKIP - result or ref empty")
 
         macroeconomic_baseline = []
         if df_macro is not None and not df_macro.empty:
@@ -479,6 +592,7 @@ class Model:
                 ref_sub = df_ref_current[[id_ref, asc_col]].drop_duplicates()
                 merged = df_current.merge(ref_sub, left_on=id_res, right_on=id_ref, how="left")
                 individual = merged[merged[asc_col].astype(str).str.strip().str.lower().str.contains("individual", na=False)]
+                print("[hanmi_acl_report] individualAnalysis: merged={}, after individual filter={}".format(len(merged), len(individual)))
                 if not individual.empty:
                     ac = self._safe_sum(individual, "amortizedCost")
                     res = self._safe_sum(individual, "onBalanceSheetReserveAdjusted") or self._safe_sum(individual, "onBalanceSheetReserve")
@@ -488,6 +602,11 @@ class Model:
                         "specificReserve": round(res, 2),
                         "pctOfType": round(100.0 * res / ac, 2) if ac else None,
                     })
+            else:
+                print("[hanmi_acl_report] individualAnalysis: SKIP - id_res={}, id_ref={}, asc_col={}".format(
+                    bool(id_res), bool(id_ref), bool(asc_col)))
+        else:
+            print("[hanmi_acl_report] individualAnalysis: SKIP - result or ref empty")
 
         unfunded_by_segment = []
         if df_current is not None and not df_current.empty and df_ref_current is not None:
@@ -496,6 +615,8 @@ class Model:
             port_ref = self._find_column(df_ref_current, "portfolioIdentifier")
             ead_col = self._find_column(df_current, "offBalanceSheetEADAmountLifetime")
             res_col = self._find_column(df_current, "offBalanceSheetReserve")
+            print("[hanmi_acl_report] unfundedBySegment: ead_col={}, res_col={}, id_res={}, port_ref={}".format(
+                bool(ead_col), bool(res_col), bool(id_res), bool(port_ref)))
             if id_res and id_ref and port_ref and (ead_col or res_col):
                 ref_sub = df_ref_current[[id_ref, port_ref]].drop_duplicates()
                 merged = df_current.merge(ref_sub, left_on=id_res, right_on=id_ref, how="left")
@@ -508,6 +629,10 @@ class Model:
                             "availableCredit": round(ead, 2),
                             "reserve": round(res, 2),
                         })
+            else:
+                print("[hanmi_acl_report] unfundedBySegment: SKIP - missing required columns")
+        else:
+            print("[hanmi_acl_report] unfundedBySegment: SKIP - result or ref empty")
 
         unfunded_trend = []
         for aid in [prior_id, current_id]:
@@ -515,9 +640,14 @@ class Model:
                 continue
             df_res = self._load_parquet_for_analysis("instrumentResult", aid, filter_summary=True)
             if df_res is None:
+                print("[hanmi_acl_report] unfundedTrend: analysisId={} SKIP - result None".format(aid))
                 continue
+            obr_col = self._find_column(df_res, "offBalanceSheetReserve")
+            ead_col = self._find_column(df_res, "offBalanceSheetEADAmountLifetime")
             obr = self._safe_sum(df_res, "offBalanceSheetReserve")
             ead = self._safe_sum(df_res, "offBalanceSheetEADAmountLifetime")
+            print("[hanmi_acl_report] unfundedTrend: analysisId={} result rows={}, obr_col={}, ead_col={}, obr={}, ead={}".format(
+                aid, len(df_res), bool(obr_col), bool(ead_col), obr, ead))
             unfunded_trend.append({"analysisId": aid, "requiredReserve": round(obr, 2), "totalUnfunded": round(ead, 2)})
 
         out = {
