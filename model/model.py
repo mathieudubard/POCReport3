@@ -116,6 +116,33 @@ class Model:
         except (TypeError, ValueError):
             return default
 
+    def _join_keys_and_log(self, left_df, right_df, left_name="left", right_name="right", analysis_id=None):
+        """
+        Return (left_on, right_on) for joining on instrumentIdentifier and optionally analysisIdentifier.
+        Logs join keys and that both sides are for the same analysis.
+        """
+        id_left = self._find_column(left_df, "instrumentIdentifier")
+        id_right = self._find_column(right_df, "instrumentIdentifier")
+        an_left = self._find_column(left_df, "analysisIdentifier")
+        an_right = self._find_column(right_df, "analysisIdentifier")
+        left_on = []
+        right_on = []
+        if id_left and id_right:
+            left_on.append(id_left)
+            right_on.append(id_right)
+        if an_left and an_right:
+            left_on.append(an_left)
+            right_on.append(an_right)
+        if not left_on:
+            print("[join] {} vs {}: no join keys (instrumentIdentifier left={}, right={})".format(
+                left_name, right_name, bool(id_left), bool(id_right)))
+            return None, None
+        print("[join] {} (rows={}) vs {} (rows={}) for same analysisId={}: join on {} -> left_on={}, right_on={}".format(
+            left_name, len(left_df), right_name, len(right_df), analysis_id,
+            ["instrumentIdentifier"] + (["analysisIdentifier"] if an_left and an_right else []),
+            left_on, right_on))
+        return left_on, right_on
+
     def _filter_summary_scenario(self, df):
         """Filter instrumentResult to scenarioIdentifier = Summary (case-insensitive)."""
         if df is None or df.empty:
@@ -441,8 +468,11 @@ class Model:
                 print("[hanmi_acl_report] segmentMethodology: ref rows={}, distinct (port+model)={}, output rows={}".format(
                     len(df_ref_current), len(dup), len(segment_methodology)))
             else:
-                print("[hanmi_acl_report] segmentMethodology: SKIP - portfolioIdentifier column not found in ref (cols: {})".format(
-                    list(df_ref_current.columns)[:12]))
+                all_cols = list(df_ref_current.columns)
+                # Log columns that might be segment/portfolio (case-insensitive)
+                port_like = [c for c in all_cols if c and "port" in str(c).lower()]
+                print("[hanmi_acl_report] segmentMethodology: SKIP - portfolioIdentifier not found in ref (port-like cols: {}, total cols: {})".format(
+                    port_like[:10] if port_like else "none", len(all_cols)))
         else:
             print("[hanmi_acl_report] segmentMethodology: SKIP - df_ref_current empty or None")
 
@@ -452,9 +482,10 @@ class Model:
             id_ref = self._find_column(df_ref_current, "instrumentIdentifier")
             asc_col = self._find_column(df_ref_current, "ascImpairmentEvaluation")
             model_col = self._find_column(df_ref_current, "lossRateModelName") or self._find_column(df_ref_current, "pdModelName")
-            if id_res and id_ref and asc_col:
-                ref_sub = df_ref_current[[id_ref, asc_col] + ([model_col] if model_col else [])].drop_duplicates()
-                merged = df_current.merge(ref_sub, left_on=id_res, right_on=id_ref, how="left")
+            left_on, right_on = self._join_keys_and_log(df_current, df_ref_current, "result", "ref", current_id)
+            if id_res and id_ref and asc_col and left_on is not None:
+                ref_sub = df_ref_current[right_on + [asc_col] + ([model_col] if model_col else [])].drop_duplicates()
+                merged = df_current.merge(ref_sub, left_on=left_on, right_on=right_on, how="left")
                 collective = merged[merged[asc_col].astype(str).str.strip().str.lower().str.contains("collective", na=False)]
                 print("[hanmi_acl_report] collectivelyByMethodology: result={}, ref={}, merged={}, after collective filter={}, model_col={}".format(
                     len(df_current), len(df_ref_current), len(merged), len(collective), "ok" if model_col else "MISSING"))
@@ -503,8 +534,11 @@ class Model:
                 print("[hanmi_acl_report] quantitativeLossRates: analysisId={} SKIP - id_res={}, id_ref={}, port_ref={}".format(
                     analysis_id, bool(id_res), bool(id_ref), bool(port_ref)))
                 continue
-            ref_sub = df_ref[[id_ref, port_ref]].drop_duplicates()
-            merged = df_res.merge(ref_sub, left_on=id_res, right_on=id_ref, how="left")
+            left_on, right_on = self._join_keys_and_log(df_res, df_ref, "result", "ref", analysis_id)
+            if left_on is None:
+                continue
+            ref_sub = df_ref[right_on + [port_ref]].drop_duplicates()
+            merged = df_res.merge(ref_sub, left_on=left_on, right_on=right_on, how="left")
             print("[hanmi_acl_report] quantitativeLossRates: analysisId={} result={}, ref={}, merged={}, groups={}".format(
                 analysis_id, len(df_res), len(df_ref), len(merged), merged[port_ref].nunique() if port_ref in merged.columns else 0))
             ac_col = self._find_column(merged, "amortizedCost")
@@ -588,9 +622,10 @@ class Model:
             id_res = self._find_column(df_current, "instrumentIdentifier")
             id_ref = self._find_column(df_ref_current, "instrumentIdentifier")
             asc_col = self._find_column(df_ref_current, "ascImpairmentEvaluation")
-            if id_res and id_ref and asc_col:
-                ref_sub = df_ref_current[[id_ref, asc_col]].drop_duplicates()
-                merged = df_current.merge(ref_sub, left_on=id_res, right_on=id_ref, how="left")
+            left_on, right_on = self._join_keys_and_log(df_current, df_ref_current, "result", "ref", current_id)
+            if id_res and id_ref and asc_col and left_on is not None:
+                ref_sub = df_ref_current[right_on + [asc_col]].drop_duplicates()
+                merged = df_current.merge(ref_sub, left_on=left_on, right_on=right_on, how="left")
                 individual = merged[merged[asc_col].astype(str).str.strip().str.lower().str.contains("individual", na=False)]
                 print("[hanmi_acl_report] individualAnalysis: merged={}, after individual filter={}".format(len(merged), len(individual)))
                 if not individual.empty:
@@ -617,9 +652,10 @@ class Model:
             res_col = self._find_column(df_current, "offBalanceSheetReserve")
             print("[hanmi_acl_report] unfundedBySegment: ead_col={}, res_col={}, id_res={}, port_ref={}".format(
                 bool(ead_col), bool(res_col), bool(id_res), bool(port_ref)))
-            if id_res and id_ref and port_ref and (ead_col or res_col):
-                ref_sub = df_ref_current[[id_ref, port_ref]].drop_duplicates()
-                merged = df_current.merge(ref_sub, left_on=id_res, right_on=id_ref, how="left")
+            left_on, right_on = self._join_keys_and_log(df_current, df_ref_current, "result", "ref", current_id)
+            if id_res and id_ref and port_ref and (ead_col or res_col) and left_on is not None:
+                ref_sub = df_ref_current[right_on + [port_ref]].drop_duplicates()
+                merged = df_current.merge(ref_sub, left_on=left_on, right_on=right_on, how="left")
                 for portfolio, grp in merged.groupby(port_ref, dropna=False):
                     ead = self._safe_sum(grp, "offBalanceSheetEADAmountLifetime") if ead_col else 0.0
                     res = self._safe_sum(grp, "offBalanceSheetReserve") if res_col else 0.0
@@ -674,6 +710,86 @@ class Model:
             len(net_chargeoffs_quarterly), len(qualitative_by_segment.get("main", [])), len(macroeconomic_baseline),
             len(individual_analysis), len(unfunded_by_segment), len(unfunded_trend)))
         print("[hanmi_acl_report] Wrote -> {}".format(out_path))
+
+        # Debug: all-data summary (ref-centered outer join, group by dimensions, aggregate metrics)
+        self._build_debug_all_data_summary(report_dir, analysis_ids)
+
+    def _build_debug_all_data_summary(self, report_dir, analysis_ids):
+        """
+        Build a debug JSON: ref-centered left join with result and reporting (same analysisId),
+        group by key dimensions, aggregate key metrics. Written to report_dir/debug_all_data_summary.json.
+        """
+        if not report_dir or not analysis_ids:
+            return
+        join_keys_used = []
+        by_analysis = {}
+        for aid in analysis_ids:
+            print("[debug_all_data] loading for same analysisId={}".format(aid))
+            df_ref = self._load_parquet_for_analysis("instrumentReference", aid)
+            df_res = self._load_parquet_for_analysis("instrumentResult", aid, filter_summary=True)
+            df_rep = self._load_parquet_for_analysis("instrumentReporting", aid)
+            ref_rows = len(df_ref) if df_ref is not None else 0
+            res_rows = len(df_res) if df_res is not None else 0
+            rep_rows = len(df_rep) if df_rep is not None else 0
+            print("[debug_all_data] analysisId={}: ref={}, result={}, reporting={} (all same analysis)".format(aid, ref_rows, res_rows, rep_rows))
+            if df_ref is None or df_ref.empty:
+                by_analysis[str(aid)] = {"refRows": 0, "resultRows": res_rows, "reportingRows": rep_rows, "mergedRows": 0, "groupedSummary": [], "error": "ref empty"}
+                continue
+            # Join keys: instrumentIdentifier (+ analysisIdentifier if in both)
+            left_on, right_on = self._join_keys_and_log(
+                df_ref, df_res if (df_res is not None and not df_res.empty) else df_ref.head(0), "ref", "result", aid
+            )
+            if left_on is None:
+                by_analysis[str(aid)] = {"refRows": ref_rows, "resultRows": res_rows, "reportingRows": rep_rows, "mergedRows": 0, "groupedSummary": [], "error": "no join keys"}
+                continue
+            if not join_keys_used:
+                join_keys_used = ["instrumentIdentifier"] + (["analysisIdentifier"] if len(left_on) > 1 else [])
+            # Ref-centered: ref left-join result, then left-join reporting
+            merged = df_ref.copy()
+            if df_res is not None and not df_res.empty:
+                merged = df_ref.merge(df_res, left_on=left_on, right_on=right_on, how="left", suffixes=("", "_result"))
+            merged_rows = len(merged)
+            if df_rep is not None and not df_rep.empty:
+                left_rep, right_rep = self._join_keys_and_log(merged, df_rep, "ref+result", "reporting", aid)
+                if left_rep is not None:
+                    merged = merged.merge(df_rep, left_on=left_rep, right_on=right_rep, how="left", suffixes=("", "_rep"))
+                    merged_rows = len(merged)
+            # Group by key dimensions (from ref)
+            port_col = self._find_column(merged, "portfolioIdentifier")
+            asc_col = self._find_column(merged, "ascImpairmentEvaluation")
+            model_col = self._find_column(merged, "lossRateModelName") or self._find_column(merged, "pdModelName")
+            group_cols = [c for c in [port_col, asc_col, model_col] if c is not None and c in merged.columns]
+            if not group_cols:
+                group_cols = [c for c in merged.columns if merged[c].nunique() < 100][:3]
+            agg_map = {}
+            for metric, col in [("amortizedCost", "amortizedCost"), ("onBalanceSheetReserveAdjusted", "onBalanceSheetReserveAdjusted"), ("onBalanceSheetReserveUnadjusted", "onBalanceSheetReserveUnadjusted"), ("netChargeOffAmount", "netChargeOffAmount"), ("offBalanceSheetReserve", "offBalanceSheetReserve"), ("offBalanceSheetEADAmountLifetime", "offBalanceSheetEADAmountLifetime")]:
+                c = self._find_column(merged, col)
+                if c is not None:
+                    agg_map[metric] = c
+            if not agg_map:
+                num_cols = merged.select_dtypes(include=["number"]).columns.tolist()
+                agg_map = {c: c for c in num_cols[:5]} if num_cols else {}
+            try:
+                g = merged.groupby(group_cols, dropna=False)
+                agg_df = g.agg({v: "sum" for v in agg_map.values()}).reset_index()
+                agg_df.columns = [str(x) for x in agg_df.columns]
+                summary = agg_df.to_dict(orient="records")
+                for r in summary[:50]:
+                    for k, v in list(r.items()):
+                        try:
+                            if pd.notna(v) and isinstance(v, (int, float)):
+                                r[k] = round(float(v), 2)
+                        except (TypeError, ValueError):
+                            pass
+                by_analysis[str(aid)] = {"refRows": ref_rows, "resultRows": res_rows, "reportingRows": rep_rows, "mergedRows": merged_rows, "groupBy": group_cols, "groupedSummary": summary[:50], "groupedSummaryTotalRows": len(summary)}
+            except Exception as e:
+                by_analysis[str(aid)] = {"refRows": ref_rows, "resultRows": res_rows, "reportingRows": rep_rows, "mergedRows": merged_rows, "groupedSummary": [], "error": str(e)}
+        out = {"joinKeysUsed": join_keys_used, "byAnalysis": by_analysis}
+        debug_path = os.path.join(report_dir, "debug_all_data_summary.json")
+        os.makedirs(report_dir, exist_ok=True)
+        with open(debug_path, "w", encoding="utf-8") as f:
+            json.dump(out, f, indent=2, default=str)
+        print("[debug_all_data] Wrote -> {} ({} analyses)".format(debug_path, len(by_analysis)))
 
     def create_report_export_zip(self):
         """Create report_export.zip in the report output dir containing all current files there (aggregate JSONs + analysisDetails)."""

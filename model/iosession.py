@@ -153,9 +153,9 @@ class IOSession :
                     path1 = self.initializeDirectory(f'{self.local_temp_directory}/inputPaths/{an_id}/{file1}')
                     analysis_path.append(path1)
                 local_directories['inputPaths'].update({file1 : analysis_path})
-            # Ensure instrumentReporting, instrumentReference, macroEconomicVariableInput dirs
+            # Ensure instrumentResult, instrumentReporting, instrumentReference, macroEconomicVariableInput dirs (callback may only return some)
             analysis_ids = self.model_run_parameters.settings.get('analysisIds', []) or []
-            for cat in ('instrumentReporting', 'instrumentReference', 'macroEconomicVariableInput'):
+            for cat in ('instrumentResult', 'instrumentReporting', 'instrumentReference', 'macroEconomicVariableInput'):
                 if cat not in local_directories['inputPaths']:
                     analysis_path = [self.initializeDirectory(f'{self.local_temp_directory}/inputPaths/{an_id}/{cat}') for an_id in analysis_ids]
                     local_directories['inputPaths'][cat] = analysis_path
@@ -614,7 +614,7 @@ class IOSession :
                 prefix = "{}/instrumentResult/analysisidentifier={}/{}/".format(base, aid, scenario)
                 keys = self._get_s3_object_keys(prefix)
                 parquet_keys = [k for k in keys if k.endswith(".parquet")]
-                print("[getSourceInputFiles] Downloading {} parquet file(s) for analysisidentifier={}".format(len(parquet_keys), aid))
+                print("[getSourceInputFiles] instrumentResult analysisidentifier={}: downloading {} parquet file(s)".format(aid, len(parquet_keys)))
                 for s3_key in parquet_keys:
                     local_path = os.path.join(local_dir, os.path.basename(s3_key))
                     if self.local_mode:
