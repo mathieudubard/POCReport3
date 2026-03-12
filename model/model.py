@@ -104,6 +104,24 @@ class Model:
                 return c
         return None
 
+    def _get_methodology_columns(self, df):
+        """Return (lossRateModelName_col, pdModelName_col, lgdModelName_col) for ref; any may be None."""
+        if df is None or df.empty:
+            return None, None, None
+        lr = self._find_column(df, "lossRateModelName")
+        pd = self._find_column(df, "pdModelName")
+        lgd = self._find_column(df, "lgdModelName")
+        return lr, pd, lgd
+
+    def _methodology_from_row(self, row, lr_col, pd_col, lgd_col):
+        """First non-null of lossRate, pdModel, lgdModel for display/grouping to avoid nulls."""
+        for col in (lr_col, pd_col, lgd_col):
+            if col is not None and col in row.index:
+                v = row.get(col)
+                if pd.notna(v) and str(v).strip():
+                    return str(v).strip()
+        return ""
+
     def _safe_sum(self, df, col, default=0.0):
         """Sum of col in df; return default if col missing or empty."""
         if df is None or df.empty:
@@ -458,12 +476,13 @@ class Model:
         segment_methodology = []
         if df_ref_current is not None and not df_ref_current.empty:
             port_col = self._find_column(df_ref_current, "portfolioIdentifier")
-            model_col = self._find_column(df_ref_current, "lossRateModelName") or self._find_column(df_ref_current, "pdModelName")
+            lr_col, pd_col, lgd_col = self._get_methodology_columns(df_ref_current)
+            model_cols = [c for c in (lr_col, pd_col, lgd_col) if c is not None]
             if port_col:
-                dup = df_ref_current[[port_col] + ([model_col] if model_col else [])].drop_duplicates()
+                dup = df_ref_current[[port_col] + model_cols].drop_duplicates() if model_cols else df_ref_current[[port_col]].drop_duplicates()
                 for _, row in dup.iterrows():
                     seg = str(row[port_col]) if pd.notna(row[port_col]) else ""
-                    meth = str(row[model_col]) if model_col and pd.notna(row.get(model_col)) else ""
+                    meth = self._methodology_from_row(row, lr_col, pd_col, lgd_col)
                     segment_methodology.append({"segment": seg, "methodology": meth})
                 print("[hanmi_acl_report] segmentMethodology: ref rows={}, distinct (port+model)={}, output rows={}".format(
                     len(df_ref_current), len(dup), len(segment_methodology)))
@@ -481,19 +500,23 @@ class Model:
             id_res = self._find_column(df_current, "instrumentIdentifier")
             id_ref = self._find_column(df_ref_current, "instrumentIdentifier")
             asc_col = self._find_column(df_ref_current, "ascImpairmentEvaluation")
-            model_col = self._find_column(df_ref_current, "lossRateModelName") or self._find_column(df_ref_current, "pdModelName")
+            lr_col, pd_col, lgd_col = self._get_methodology_columns(df_ref_current)
+            model_cols = [c for c in (lr_col, pd_col, lgd_col) if c is not None]
             left_on, right_on = self._join_keys_and_log(df_current, df_ref_current, "result", "ref", current_id)
             if id_res and id_ref and asc_col and left_on is not None:
-                ref_sub = df_ref_current[right_on + [asc_col] + ([model_col] if model_col else [])].drop_duplicates()
+                ref_sub = df_ref_current[right_on + [asc_col] + model_cols].drop_duplicates() if model_cols else df_ref_current[right_on + [asc_col]].drop_duplicates()
                 merged = df_current.merge(ref_sub, left_on=left_on, right_on=right_on, how="left")
                 collective = merged[merged[asc_col].astype(str).str.strip().str.lower().str.contains("collective", na=False)]
-                print("[hanmi_acl_report] collectivelyByMethodology: result={}, ref={}, merged={}, after collective filter={}, model_col={}".format(
-                    len(df_current), len(df_ref_current), len(merged), len(collective), "ok" if model_col else "MISSING"))
-                if not collective.empty and model_col:
+                # Per-row methodology: first non-null of lossRate, PD, LGD so report avoids nulls
+                collective = collective.copy()
+                collective["_methodology"] = collective.apply(lambda r: self._methodology_from_row(r, lr_col, pd_col, lgd_col), axis=1)
+                print("[hanmi_acl_report] collectivelyByMethodology: result={}, ref={}, merged={}, after collective filter={}, model_cols(lr,pd,lgd)={}".format(
+                    len(df_current), len(df_ref_current), len(merged), len(collective), bool(lr_col or pd_col or lgd_col)))
+                if not collective.empty:
                     adj_col = self._find_column(collective, "onBalanceSheetReserveAdjusted")
                     unadj_col = self._find_column(collective, "onBalanceSheetReserveUnadjusted")
                     ac_col = self._find_column(collective, "amortizedCost")
-                    for methodology, grp in collective.groupby(model_col, dropna=False):
+                    for methodology, grp in collective.groupby("_methodology", dropna=False):
                         ac = self._safe_sum(grp, "amortizedCost") if ac_col else 0.0
                         quant = self._safe_sum(grp, "onBalanceSheetReserveUnadjusted") if unadj_col else 0.0
                         qual = (grp[adj_col].sum() - grp[unadj_col].sum()) if (adj_col and unadj_col) else 0.0
@@ -754,11 +777,13 @@ class Model:
                 if left_rep is not None:
                     merged = merged.merge(df_rep, left_on=left_rep, right_on=right_rep, how="left", suffixes=("", "_rep"))
                     merged_rows = len(merged)
-            # Group by key dimensions (from ref)
+            # Group by key dimensions (from ref): portfolio, evaluation type, loss rate / PD / LGD model
             port_col = self._find_column(merged, "portfolioIdentifier")
             asc_col = self._find_column(merged, "ascImpairmentEvaluation")
-            model_col = self._find_column(merged, "lossRateModelName") or self._find_column(merged, "pdModelName")
-            group_cols = [c for c in [port_col, asc_col, model_col] if c is not None and c in merged.columns]
+            lr_col = self._find_column(merged, "lossRateModelName")
+            pd_col = self._find_column(merged, "pdModelName")
+            lgd_col = self._find_column(merged, "lgdModelName")
+            group_cols = [c for c in [port_col, asc_col, lr_col, pd_col, lgd_col] if c is not None and c in merged.columns]
             if not group_cols:
                 group_cols = [c for c in merged.columns if merged[c].nunique() < 100][:3]
             agg_map = {}
