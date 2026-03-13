@@ -4,6 +4,7 @@ import iosession
 import json
 import logging
 import os
+import re
 import pandas as pd
 import zipfile
 
@@ -267,6 +268,85 @@ class Model:
             return (int(pd.Timestamp(dt).year), q)
         except Exception:
             return None
+
+    def _normalize_segment_display(self, segment):
+        """Return display string for segment; normalize nan/empty to 'Unallocated'."""
+        if segment is None or (isinstance(segment, float) and pd.isna(segment)):
+            return "Unallocated"
+        s = str(segment).strip()
+        if s == "" or s.lower() == "nan":
+            return "Unallocated"
+        return s
+
+    def _parse_quarter_label(self, quarter_label):
+        """Parse 'Q{n} {year}' -> (year, quarter_num). Returns None if unparseable."""
+        if not quarter_label:
+            return None
+        m = re.match(r"Q(\d)\s+(\d{4})", str(quarter_label).strip(), re.IGNORECASE)
+        if m:
+            return (int(m.group(2)), int(m.group(1)))
+        return None
+
+    def _add_quantitative_deltas(self, main_rows):
+        """
+        Add incrDecrQtoQ and incrDecrYtoY (loss rate and reserve) to each row.
+        Look up prior quarter and prior-year-same-quarter by (segment, year, q).
+        """
+        if not main_rows:
+            return
+        lookup = {}
+        for row in main_rows:
+            yq = self._parse_quarter_label(row.get("quarterLabel"))
+            if yq:
+                key = (row.get("segment"), yq[0], yq[1])
+                lookup[key] = row
+        for row in main_rows:
+            yq = self._parse_quarter_label(row.get("quarterLabel"))
+            if not yq:
+                continue
+            y, q = yq
+            prior_q = (y, q - 1) if q > 1 else (y - 1, 4)
+            prior_y = (y - 1, q)
+            seg = row.get("segment")
+            prior_q_row = lookup.get((seg, prior_q[0], prior_q[1]))
+            prior_y_row = lookup.get((seg, prior_y[0], prior_y[1]))
+            if prior_q_row is not None:
+                cur_r = row.get("lossRatePct")
+                pr_r = prior_q_row.get("lossRatePct")
+                if cur_r is not None and pr_r is not None:
+                    row["incrDecrQtoQ_lossRatePct"] = round(float(cur_r) - float(pr_r), 4)
+                cur_res = row.get("quantitativeReserve")
+                pr_res = prior_q_row.get("quantitativeReserve")
+                if cur_res is not None and pr_res is not None:
+                    row["incrDecrQtoQ_quantitativeReserve"] = round(float(cur_res) - float(pr_res), 2)
+            else:
+                row["incrDecrQtoQ_lossRatePct"] = None
+                row["incrDecrQtoQ_quantitativeReserve"] = None
+            if prior_y_row is not None:
+                cur_r = row.get("lossRatePct")
+                pr_r = prior_y_row.get("lossRatePct")
+                if cur_r is not None and pr_r is not None:
+                    row["incrDecrYtoY_lossRatePct"] = round(float(cur_r) - float(pr_r), 4)
+                cur_res = row.get("quantitativeReserve")
+                pr_res = prior_y_row.get("quantitativeReserve")
+                if cur_res is not None and pr_res is not None:
+                    row["incrDecrYtoY_quantitativeReserve"] = round(float(cur_res) - float(pr_res), 2)
+            else:
+                row["incrDecrYtoY_lossRatePct"] = None
+                row["incrDecrYtoY_quantitativeReserve"] = None
+
+    def _build_net_chargeoffs_annual(self, net_chargeoffs_quarterly):
+        """Aggregate netChargeOffsQuarterly by segment and year. Returns list of { segment, year, netChargeOffs }."""
+        by_seg_year = {}
+        for row in net_chargeoffs_quarterly or []:
+            seg = row.get("segment") or "Unallocated"
+            yq = self._parse_quarter_label(row.get("quarterLabel"))
+            if not yq:
+                continue
+            year = yq[0]
+            key = (seg, year)
+            by_seg_year[key] = by_seg_year.get(key, 0.0) + float(row.get("netChargeOffs") or 0)
+        return [{"segment": seg, "year": year, "netChargeOffs": round(v, 2)} for (seg, year), v in sorted(by_seg_year.items())]
 
     def _infer_analysis_roles_from_dates(self, report_dir, analysis_ids):
         """
@@ -648,7 +728,7 @@ class Model:
             if segment_col:
                 dup = df_ref_current[[segment_col] + model_cols].drop_duplicates() if model_cols else df_ref_current[[segment_col]].drop_duplicates()
                 for _, row in dup.iterrows():
-                    seg = str(row[segment_col]) if pd.notna(row[segment_col]) else ""
+                    seg = self._normalize_segment_display(row.get(segment_col))
                     meth = self._methodology_from_row(row, lr_col, pd_col, lgd_col)
                     segment_methodology.append({"segment": seg, "methodology": meth})
                 print("[hanmi_acl_report] segmentMethodology: dimension={}, ref rows={}, distinct={}, output rows={}".format(
@@ -731,14 +811,17 @@ class Model:
                 ac = self._safe_sum(grp, "amortizedCost") if ac_col else 0.0
                 quant = self._safe_sum(grp, "onBalanceSheetReserveUnadjusted") if quant_col else 0.0
                 rate = (quant / ac * 100.0) if ac else None
+                seg_display = self._normalize_segment_display(portfolio)
                 quantitative_by_segment["main"].append({
-                    "segment": str(portfolio) if portfolio is not None else "",
+                    "segment": seg_display,
                     "analysisId": analysis_id,
                     "quarterLabel": quarter_label,
                     "amortizedCost": round(ac, 2),
                     "quantitativeReserve": round(quant, 2),
                     "lossRatePct": round(rate, 4) if rate is not None else None,
                 })
+        # P1: Add Q→Q and Y→Y deltas for loss rate and reserve
+        self._add_quantitative_deltas(quantitative_by_segment["main"])
 
         net_chargeoffs_quarterly = []
         for aid, qlabel in quarters_for_tables:
@@ -755,7 +838,7 @@ class Model:
                 for portfolio, grp in df_rep.groupby(port_col, dropna=False):
                     net = grp[net_col].sum() if net_col else ((grp[gco_col].sum() - grp[rec_col].sum()) if (gco_col and rec_col) else 0.0)
                     net_chargeoffs_quarterly.append({
-                        "segment": str(portfolio) if portfolio is not None else "",
+                        "segment": self._normalize_segment_display(portfolio),
                         "analysisId": aid,
                         "quarterLabel": qlabel,
                         "netChargeOffs": round(float(net), 2),
@@ -765,6 +848,8 @@ class Model:
                     self._safe_sum(df_rep, "grossChargeOffAmount") - self._safe_sum(df_rep, "recoveryAmount")
                 )
                 net_chargeoffs_quarterly.append({"segment": "Total", "analysisId": aid, "quarterLabel": qlabel, "netChargeOffs": round(float(net), 2)})
+        # P1: netChargeOffsAnnual by segment and year
+        net_chargeoffs_annual = self._build_net_chargeoffs_annual(net_chargeoffs_quarterly)
 
         qualitative_by_segment = {"main": []}
         if df_current is not None and not df_current.empty and df_ref_current is not None:
@@ -781,7 +866,7 @@ class Model:
                     ac = self._safe_sum(grp, "amortizedCost") if ac_col else 0.0
                     rate = (qual / ac * 100.0) if ac else None
                     qualitative_by_segment["main"].append({
-                        "segment": str(portfolio) if portfolio is not None else "",
+                        "segment": self._normalize_segment_display(portfolio),
                         "qualitativeReserve": round(qual, 2),
                         "qualitativeRatePct": round(rate, 4) if rate is not None else None,
                     })
@@ -846,7 +931,7 @@ class Model:
                     res = self._safe_sum(grp, "offBalanceSheetReserve") if res_col else 0.0
                     if ead or res:
                         unfunded_by_segment.append({
-                            "segment": str(portfolio) if portfolio is not None else "",
+                            "segment": self._normalize_segment_display(portfolio),
                             "availableCredit": round(ead, 2),
                             "reserve": round(res, 2),
                         })
@@ -867,7 +952,17 @@ class Model:
             ead_col = self._find_column(df_res, "offBalanceSheetEADAmountLifetime")
             obr = self._safe_sum(df_res, "offBalanceSheetReserve")
             ead = self._safe_sum(df_res, "offBalanceSheetEADAmountLifetime")
-            unfunded_trend.append({"analysisId": aid, "quarterLabel": qlabel, "requiredReserve": round(obr, 2), "totalUnfunded": round(ead, 2)})
+            row = {"analysisId": aid, "quarterLabel": qlabel, "requiredReserve": round(obr, 2), "totalUnfunded": round(ead, 2)}
+            unfunded_trend.append(row)
+        # P1: beginningReserve (prior quarter's requiredReserve), provision, quarterChange
+        for i, row in enumerate(unfunded_trend):
+            row["beginningReserve"] = round(unfunded_trend[i - 1]["requiredReserve"], 2) if i > 0 else None
+            # Provision for unfunded: from instrumentReporting if available (e.g. allowanceChangeDueTo* OBS); else None
+            row["provision"] = None
+            if row["beginningReserve"] is not None:
+                row["quarterChange"] = round(float(row["requiredReserve"]) - float(row["beginningReserve"]), 2)
+            else:
+                row["quarterChange"] = None
 
         out = {
             "reportMetadata": report_metadata,
@@ -875,6 +970,7 @@ class Model:
             "collectivelyEvaluatedByMethodology": collectively_by_methodology,
             "quantitativeLossRatesBySegment": quantitative_by_segment,
             "netChargeOffsQuarterly": net_chargeoffs_quarterly,
+            "netChargeOffsAnnual": net_chargeoffs_annual,
             "qualitativeReservesBySegment": qualitative_by_segment,
             "macroeconomicBaseline": macroeconomic_baseline,
             "individualAnalysis": individual_analysis,

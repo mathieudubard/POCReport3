@@ -83,6 +83,22 @@ class TestModelHelpers(unittest.TestCase):
         self.assertIsNone(self.model._resolve_column(df, "portfolioIdentifier", "portfolioidentifier"))
         self.assertIsNone(self.model._resolve_column(None, "x"))
 
+    def test_normalize_segment_display(self):
+        """P1: _normalize_segment_display maps nan/empty to Unallocated."""
+        self.assertEqual(self.model._normalize_segment_display("CRE"), "CRE")
+        self.assertEqual(self.model._normalize_segment_display(""), "Unallocated")
+        self.assertEqual(self.model._normalize_segment_display("nan"), "Unallocated")
+        self.assertEqual(self.model._normalize_segment_display(None), "Unallocated")
+        import numpy as np
+        self.assertEqual(self.model._normalize_segment_display(np.nan), "Unallocated")
+
+    def test_parse_quarter_label(self):
+        """P1: _parse_quarter_label parses Qn YYYY -> (year, quarter)."""
+        self.assertEqual(self.model._parse_quarter_label("Q2 2025"), (2025, 2))
+        self.assertEqual(self.model._parse_quarter_label("Q4 2024"), (2024, 4))
+        self.assertIsNone(self.model._parse_quarter_label(""))
+        self.assertIsNone(self.model._parse_quarter_label("invalid"))
+
     def test_get_methodology_columns_and_methodology_from_row(self):
         """_get_methodology_columns and _methodology_from_row use PD/LGD when lossRate missing."""
         df = pd.DataFrame({
@@ -276,6 +292,7 @@ class TestBuildHanmiAclQuarterlyReport(unittest.TestCase):
         self.assertIn("collectivelyEvaluatedByMethodology", data)
         self.assertIn("quantitativeLossRatesBySegment", data)
         self.assertIn("netChargeOffsQuarterly", data)
+        self.assertIn("netChargeOffsAnnual", data)
         self.assertIn("qualitativeReservesBySegment", data)
         self.assertIn("macroeconomicBaseline", data)
         self.assertIn("individualAnalysis", data)
@@ -290,6 +307,8 @@ class TestBuildHanmiAclQuarterlyReport(unittest.TestCase):
         trend = data.get("unfundedTrend", [])
         if trend:
             self.assertIn("quarterLabel", trend[0], "unfundedTrend rows should have quarterLabel")
+            self.assertIn("beginningReserve", trend[0], "unfundedTrend rows should have beginningReserve (P1)")
+            self.assertIn("quarterChange", trend[0], "unfundedTrend rows should have quarterChange (P1)")
 
     def test_collectively_by_methodology_with_mock_data(self):
         """With mock result + ref (collective, methodology), section is populated."""

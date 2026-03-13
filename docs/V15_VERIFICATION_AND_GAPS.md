@@ -40,14 +40,14 @@ Run used **callback only** — **no input JSON analysis payload** was provided. 
 
 ## 3. Remaining Gaps Toward the Report (PDF / REPORT_MAPPING)
 
-### P1 – Quantitative (high impact)
+### P1 – Quantitative (high impact) — **implemented**
 
-| Gap | v15 state | Target (REPORT_MAPPING / QUANTITATIVE_GAP_AND_PRIORITY) |
-|-----|----------|----------------------------------------------------------------|
-| **Quarter-over-quarter and YoY deltas** | Not in JSON | **incrDecrQtoQ**, **incrDecrYtoY** (and same for reserves) in quantitativeLossRatesBySegment.main |
-| **Unfunded trend full columns** | requiredReserve, totalUnfunded only | **beginningReserve**, **provision**, **quarterChange** |
-| **netChargeOffsAnnual** | Not present | By segment and **year** (e.g. 2021–2025) |
-| **Segment display** | "nan" and "" in segments | Normalize to "Unallocated" or omit |
+| Gap | Status | Notes |
+|-----|--------|--------|
+| **Quarter-over-quarter and YoY deltas** | Done | quantitativeLossRatesBySegment.main rows now include **incrDecrQtoQ_lossRatePct**, **incrDecrYtoY_lossRatePct**, **incrDecrQtoQ_quantitativeReserve**, **incrDecrYtoY_quantitativeReserve** (null when prior quarter/prior year not in data). |
+| **Unfunded trend full columns** | Done | unfundedTrend rows include **beginningReserve** (prior quarter’s requiredReserve), **provision** (null; can be wired to OBS provision from reporting later), **quarterChange** (requiredReserve − beginningReserve). |
+| **netChargeOffsAnnual** | Done | **netChargeOffsAnnual** array: by segment and year, aggregated from netChargeOffsQuarterly. |
+| **Segment display** | Done | **segment** normalized to **"Unallocated"** for nan/empty in segmentMethodology, quantitativeLossRatesBySegment.main, qualitativeReservesBySegment.main, unfundedBySegment, netChargeOffsQuarterly. |
 
 ### P2 – Structure / completeness
 
