@@ -559,7 +559,7 @@ class IOSession :
             return
         input_dir = os.path.join(self.local_temp_directory, "input")
         if not os.path.isdir(input_dir):
-            print("[getSourceInputFiles] analysis metadata: no input dir (skipping)")
+            print("[getSourceInputFiles] analysis metadata: no input dir (optional; using callback analysisIds + date-inferred roles)")
             return
         found = None
         for root, _dirs, files in os.walk(input_dir):

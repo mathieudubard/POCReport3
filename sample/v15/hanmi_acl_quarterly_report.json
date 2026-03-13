@@ -1,0 +1,538 @@
+{
+  "reportMetadata": {
+    "reportTitle": "Allowance for Credit Losses \u2013 Quarterly Analysis and Supplemental Exhibits",
+    "currentAnalysisId": "4647997",
+    "priorAnalysisId": "4647909",
+    "priorYearAnalysisId": null,
+    "quartersAnalysisIds": [
+      "4647997",
+      "4647909"
+    ]
+  },
+  "segmentMethodology": [
+    {
+      "segment": "SME",
+      "methodology": "Instrument Preset"
+    },
+    {
+      "segment": "SME",
+      "methodology": "MA Public Firm TTC to PIT PD Converter"
+    },
+    {
+      "segment": "Retail",
+      "methodology": "EDF-X"
+    },
+    {
+      "segment": "SME",
+      "methodology": "MA Private Firm TTC to PIT PD Converter"
+    },
+    {
+      "segment": "CRE",
+      "methodology": "Instrument Preset"
+    },
+    {
+      "segment": "Retail",
+      "methodology": "Instrument Preset"
+    },
+    {
+      "segment": "SME",
+      "methodology": "Instrument Preset"
+    },
+    {
+      "segment": "",
+      "methodology": "Instrument Preset"
+    }
+  ],
+  "collectivelyEvaluatedByMethodology": [
+    {
+      "methodology": "EDF-X",
+      "amortizedCost": 5540513278.25,
+      "quantitativeReserve": 29281164.49,
+      "qualitativeReserve": 0.0,
+      "totalReserve": 29281164.49,
+      "pctOfEvaluationType": 5.06
+    },
+    {
+      "methodology": "Instrument Preset",
+      "amortizedCost": 54495620615.37,
+      "quantitativeReserve": 478044131.44,
+      "qualitativeReserve": 0.0,
+      "totalReserve": 478044131.44,
+      "pctOfEvaluationType": 82.6
+    },
+    {
+      "methodology": "MA Private Firm TTC to PIT PD Converter",
+      "amortizedCost": 2320285010.31,
+      "quantitativeReserve": 16405167.18,
+      "qualitativeReserve": 0.0,
+      "totalReserve": 16405167.18,
+      "pctOfEvaluationType": 2.83
+    },
+    {
+      "methodology": "MA Public Firm TTC to PIT PD Converter",
+      "amortizedCost": 4126717147.0,
+      "quantitativeReserve": 55023205.87,
+      "qualitativeReserve": 0.0,
+      "totalReserve": 55023205.87,
+      "pctOfEvaluationType": 9.51
+    }
+  ],
+  "quantitativeLossRatesBySegment": {
+    "main": [
+      {
+        "segment": "CRE",
+        "analysisId": "4647997",
+        "quarterLabel": "Q2 2025",
+        "amortizedCost": 24793011469.83,
+        "quantitativeReserve": 170109513.4,
+        "lossRatePct": 0.6861
+      },
+      {
+        "segment": "Retail",
+        "analysisId": "4647997",
+        "quarterLabel": "Q2 2025",
+        "amortizedCost": 7380699930.65,
+        "quantitativeReserve": 71858726.19,
+        "lossRatePct": 0.9736
+      },
+      {
+        "segment": "SME",
+        "analysisId": "4647997",
+        "quarterLabel": "Q2 2025",
+        "amortizedCost": 35912568002.73,
+        "quantitativeReserve": 355483798.07,
+        "lossRatePct": 0.9899
+      },
+      {
+        "segment": "nan",
+        "analysisId": "4647997",
+        "quarterLabel": "Q2 2025",
+        "amortizedCost": 68086279403.21,
+        "quantitativeReserve": 597452037.66,
+        "lossRatePct": 0.8775
+      },
+      {
+        "segment": "CRE",
+        "analysisId": "4647909",
+        "quarterLabel": "Q1 2025",
+        "amortizedCost": 25310003909.71,
+        "quantitativeReserve": 187283450.39,
+        "lossRatePct": 0.74
+      },
+      {
+        "segment": "Retail",
+        "analysisId": "4647909",
+        "quarterLabel": "Q1 2025",
+        "amortizedCost": 7469130070.57,
+        "quantitativeReserve": 71293596.17,
+        "lossRatePct": 0.9545
+      },
+      {
+        "segment": "SME",
+        "analysisId": "4647909",
+        "quarterLabel": "Q1 2025",
+        "amortizedCost": 37959978494.09,
+        "quantitativeReserve": 368304035.3,
+        "lossRatePct": 0.9702
+      }
+    ],
+    "creSubSegments": []
+  },
+  "netChargeOffsQuarterly": [
+    {
+      "segment": "US South Regional Bank Demo (ISv2)",
+      "analysisId": "4647997",
+      "quarterLabel": "Q2 2025",
+      "netChargeOffs": 12056025.0
+    },
+    {
+      "segment": "US South Regional Bank Demo (ISv2)",
+      "analysisId": "4647909",
+      "quarterLabel": "Q1 2025",
+      "netChargeOffs": 0.0
+    }
+  ],
+  "qualitativeReservesBySegment": {
+    "main": [
+      {
+        "segment": "CRE",
+        "qualitativeReserve": 0.0,
+        "qualitativeRatePct": 0.0
+      },
+      {
+        "segment": "Retail",
+        "qualitativeReserve": 0.0,
+        "qualitativeRatePct": 0.0
+      },
+      {
+        "segment": "SME",
+        "qualitativeReserve": 0.0,
+        "qualitativeRatePct": 0.0
+      }
+    ]
+  },
+  "macroeconomicBaseline": [
+    {
+      "variableName": "USA Unemployment Rate",
+      "valueDate": "2024-06-30",
+      "value": 4.0
+    },
+    {
+      "variableName": "US Treasury 3 Year",
+      "valueDate": "2025-06-30",
+      "value": 3.83452
+    },
+    {
+      "variableName": "USA Real GDP Growth",
+      "valueDate": "2026-03-31",
+      "value": 1.47222
+    },
+    {
+      "variableName": "USA House Price Index FHFA",
+      "valueDate": "2025-12-31",
+      "value": 708.23543
+    },
+    {
+      "variableName": "USA CRE Price Index Growth",
+      "valueDate": "2025-12-31",
+      "value": -0.07949
+    },
+    {
+      "variableName": "USA Real GDP Growth",
+      "valueDate": "2024-12-31",
+      "value": 2.45046
+    },
+    {
+      "variableName": "USA BBB Spread",
+      "valueDate": "2025-03-31",
+      "value": 1.16496
+    },
+    {
+      "variableName": "USA Unemployment Rate",
+      "valueDate": "2025-12-31",
+      "value": 4.34179
+    },
+    {
+      "variableName": "USA Retail Sales and Food Services Growth",
+      "valueDate": "2026-06-30",
+      "value": 3.04391
+    },
+    {
+      "variableName": "US Treasury 3 Year",
+      "valueDate": "2026-06-30",
+      "value": 3.81562
+    },
+    {
+      "variableName": "USA House Price Index FHFA",
+      "valueDate": "2024-09-30",
+      "value": 680.43763
+    },
+    {
+      "variableName": "USA BBB Spread",
+      "valueDate": "2025-06-30",
+      "value": 1.58175
+    },
+    {
+      "variableName": "USA House Price Index FHFA",
+      "valueDate": "2025-09-30",
+      "value": 705.64196
+    },
+    {
+      "variableName": "USA House Price Index FHFA",
+      "valueDate": "2026-06-30",
+      "value": 713.08229
+    },
+    {
+      "variableName": "US Treasury 3 Year",
+      "valueDate": "2024-09-30",
+      "value": 3.87531
+    },
+    {
+      "variableName": "USA Retail Sales and Food Services Growth",
+      "valueDate": "2025-03-31",
+      "value": 1.79201
+    },
+    {
+      "variableName": "USA BBB Spread",
+      "valueDate": "2026-03-31",
+      "value": 2.11852
+    },
+    {
+      "variableName": "US Treasury 3 Year",
+      "valueDate": "2025-12-31",
+      "value": 3.93934
+    },
+    {
+      "variableName": "USA Unemployment Rate",
+      "valueDate": "2025-03-31",
+      "value": 4.1
+    },
+    {
+      "variableName": "USA Unemployment Rate",
+      "valueDate": "2026-06-30",
+      "value": 4.65298
+    },
+    {
+      "variableName": "USA CRE Price Index Growth",
+      "valueDate": "2024-12-31",
+      "value": -0.78562
+    },
+    {
+      "variableName": "USA BBB Spread",
+      "valueDate": "2024-12-31",
+      "value": 1.14904
+    },
+    {
+      "variableName": "USA CRE Price Index Growth",
+      "valueDate": "2025-09-30",
+      "value": -0.05671
+    },
+    {
+      "variableName": "USA Unemployment Rate",
+      "valueDate": "2026-03-31",
+      "value": 4.49975
+    },
+    {
+      "variableName": "USA BBB Spread",
+      "valueDate": "2025-12-31",
+      "value": 1.98874
+    },
+    {
+      "variableName": "US Treasury 3 Year",
+      "valueDate": "2024-12-31",
+      "value": 4.10339
+    },
+    {
+      "variableName": "USA House Price Index FHFA",
+      "valueDate": "2026-03-31",
+      "value": 710.70805
+    },
+    {
+      "variableName": "USA Retail Sales and Food Services Growth",
+      "valueDate": "2024-12-31",
+      "value": 7.38196
+    },
+    {
+      "variableName": "USA Real GDP Growth",
+      "valueDate": "2025-12-31",
+      "value": 1.4143
+    },
+    {
+      "variableName": "USA Unemployment Rate",
+      "valueDate": "2025-09-30",
+      "value": 4.27764
+    },
+    {
+      "variableName": "USA CRE Price Index Growth",
+      "valueDate": "2026-06-30",
+      "value": -0.22656
+    },
+    {
+      "variableName": "US Treasury 3 Year",
+      "valueDate": "2026-03-31",
+      "value": 3.86863
+    },
+    {
+      "variableName": "USA Unemployment Rate",
+      "valueDate": "2025-06-30",
+      "value": 4.23614
+    },
+    {
+      "variableName": "USA House Price Index FHFA",
+      "valueDate": "2025-06-30",
+      "value": 704.49
+    },
+    {
+      "variableName": "USA Real GDP Growth",
+      "valueDate": "2025-09-30",
+      "value": 0.59629
+    },
+    {
+      "variableName": "US Treasury 3 Year",
+      "valueDate": "2025-09-30",
+      "value": 3.94065
+    },
+    {
+      "variableName": "USA House Price Index FHFA",
+      "valueDate": "2024-06-30",
+      "value": 673.9021
+    },
+    {
+      "variableName": "USA Real GDP Growth",
+      "valueDate": "2024-09-30",
+      "value": 3.07283
+    },
+    {
+      "variableName": "USA House Price Index FHFA",
+      "valueDate": "2024-12-31",
+      "value": 693.51378
+    },
+    {
+      "variableName": "USA BBB Spread",
+      "valueDate": "2024-09-30",
+      "value": 1.37196
+    },
+    {
+      "variableName": "USA Retail Sales and Food Services Growth",
+      "valueDate": "2025-06-30",
+      "value": -0.75233
+    },
+    {
+      "variableName": "USA CRE Price Index Growth",
+      "valueDate": "2024-06-30",
+      "value": -3.99802
+    },
+    {
+      "variableName": "USA Retail Sales and Food Services Growth",
+      "valueDate": "2026-03-31",
+      "value": 3.46634
+    },
+    {
+      "variableName": "USA Retail Sales and Food Services Growth",
+      "valueDate": "2024-09-30",
+      "value": 5.75446
+    },
+    {
+      "variableName": "USA BBB Spread",
+      "valueDate": "2026-06-30",
+      "value": 2.16244
+    },
+    {
+      "variableName": "USA Real GDP Growth",
+      "valueDate": "2026-06-30",
+      "value": 1.44988
+    },
+    {
+      "variableName": "US Treasury 3 Year",
+      "valueDate": "2024-06-30",
+      "value": 4.62952
+    },
+    {
+      "variableName": "USA Retail Sales and Food Services Growth",
+      "valueDate": "2025-09-30",
+      "value": 4.14808
+    },
+    {
+      "variableName": "USA Unemployment Rate",
+      "valueDate": "2024-12-31",
+      "value": 4.13333
+    },
+    {
+      "variableName": "USA CRE Price Index Growth",
+      "valueDate": "2025-06-30",
+      "value": 0.45132
+    },
+    {
+      "variableName": "US Treasury 3 Year",
+      "valueDate": "2025-03-31",
+      "value": 4.16885
+    },
+    {
+      "variableName": "USA CRE Price Index Growth",
+      "valueDate": "2026-03-31",
+      "value": -0.43054
+    },
+    {
+      "variableName": "USA BBB Spread",
+      "valueDate": "2025-09-30",
+      "value": 1.86465
+    },
+    {
+      "variableName": "USA Real GDP Growth",
+      "valueDate": "2024-06-30",
+      "value": 2.98885
+    },
+    {
+      "variableName": "USA CRE Price Index Growth",
+      "valueDate": "2025-03-31",
+      "value": 0.58669
+    },
+    {
+      "variableName": "USA CRE Price Index Growth",
+      "valueDate": "2024-09-30",
+      "value": 1.83621
+    },
+    {
+      "variableName": "USA Real GDP Growth",
+      "valueDate": "2025-03-31",
+      "value": -0.24278
+    },
+    {
+      "variableName": "USA Unemployment Rate",
+      "valueDate": "2024-09-30",
+      "value": 4.16667
+    },
+    {
+      "variableName": "USA BBB Spread",
+      "valueDate": "2024-06-30",
+      "value": 1.34659
+    },
+    {
+      "variableName": "USA Retail Sales and Food Services Growth",
+      "valueDate": "2025-12-31",
+      "value": 3.85863
+    },
+    {
+      "variableName": "USA Retail Sales and Food Services Growth",
+      "valueDate": "2024-06-30",
+      "value": 3.38432
+    },
+    {
+      "variableName": "USA House Price Index FHFA",
+      "valueDate": "2025-03-31",
+      "value": 701.53103
+    },
+    {
+      "variableName": "USA Real GDP Growth",
+      "valueDate": "2025-06-30",
+      "value": 1.87615
+    }
+  ],
+  "individualAnalysis": [
+    {
+      "evaluationType": "Individually Evaluated",
+      "amortizedCost": 1603143352.28,
+      "specificReserve": 18698368.67,
+      "pctOfType": 1.17
+    }
+  ],
+  "unfundedBySegment": [
+    {
+      "segment": "CRE",
+      "availableCredit": 7839680310.29,
+      "reserve": 53147713.91
+    },
+    {
+      "segment": "Retail",
+      "availableCredit": 408354349.54,
+      "reserve": 16219999.63
+    },
+    {
+      "segment": "SME",
+      "availableCredit": 15294737796.74,
+      "reserve": 129754843.26
+    },
+    {
+      "segment": "nan",
+      "availableCredit": 23542772456.57,
+      "reserve": 0.0
+    }
+  ],
+  "unfundedTrend": [
+    {
+      "analysisId": "4647997",
+      "quarterLabel": "Q2 2025",
+      "requiredReserve": 199122556.81,
+      "totalUnfunded": 47085544913.14
+    },
+    {
+      "analysisId": "4647909",
+      "quarterLabel": "Q1 2025",
+      "requiredReserve": 209281440.86,
+      "totalUnfunded": 24242059441.56
+    }
+  ],
+  "parametersInventory": {},
+  "peerRatios": {},
+  "hanmiSummaryMetrics": {}
+}
