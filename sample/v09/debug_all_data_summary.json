@@ -1,0 +1,248 @@
+{
+  "joinKeysUsed": [
+    "instrumentIdentifier",
+    "analysisIdentifier"
+  ],
+  "byAnalysis": {
+    "4647997": {
+      "refRows": 20968,
+      "resultRows": 41934,
+      "reportingRows": 20967,
+      "mergedRows": 20968,
+      "groupBy": [
+        "portfolioidentifier",
+        "ascimpairmentevaluation",
+        "lossratemodelname",
+        "pdmodelname",
+        "lgdmodelname"
+      ],
+      "groupedSummary": [
+        {
+          "portfolioidentifier": "US South Regional Bank Demo (ISv2)",
+          "ascimpairmentevaluation": "Collectively Evaluated",
+          "lossratemodelname": NaN,
+          "pdmodelname": "EDF-X",
+          "lgdmodelname": "Instrument Preset",
+          "amortizedcost": 5540513278.25,
+          "onbalancesheetreserveadjusted": 29281164.49,
+          "onbalancesheetreserveunadjusted": 29281164.49,
+          "netchargeoffamount": 0.0,
+          "offbalancesheetreserve": 0.0,
+          "offbalancesheeteadamountlifetime": 0.0
+        },
+        {
+          "portfolioidentifier": "US South Regional Bank Demo (ISv2)",
+          "ascimpairmentevaluation": "Collectively Evaluated",
+          "lossratemodelname": NaN,
+          "pdmodelname": "Instrument Preset",
+          "lgdmodelname": "Instrument Preset",
+          "amortizedcost": 30825320938.51,
+          "onbalancesheetreserveadjusted": 223470613.13,
+          "onbalancesheetreserveunadjusted": 223470613.13,
+          "netchargeoffamount": 0.0,
+          "offbalancesheetreserve": 80445666.09,
+          "offbalancesheeteadamountlifetime": 11793064632.91
+        },
+        {
+          "portfolioidentifier": "US South Regional Bank Demo (ISv2)",
+          "ascimpairmentevaluation": "Collectively Evaluated",
+          "lossratemodelname": NaN,
+          "pdmodelname": "Instrument Preset",
+          "lgdmodelname": "RiskCalc LGD",
+          "amortizedcost": 23670299676.86,
+          "onbalancesheetreserveadjusted": 254573518.32,
+          "onbalancesheetreserveunadjusted": 254573518.32,
+          "netchargeoffamount": 0.0,
+          "offbalancesheetreserve": 79014885.39,
+          "offbalancesheeteadamountlifetime": 8382525606.94
+        },
+        {
+          "portfolioidentifier": "US South Regional Bank Demo (ISv2)",
+          "ascimpairmentevaluation": "Collectively Evaluated",
+          "lossratemodelname": NaN,
+          "pdmodelname": "MA Private Firm TTC to PIT PD Converter",
+          "lgdmodelname": "RiskCalc LGD",
+          "amortizedcost": 2320285010.31,
+          "onbalancesheetreserveadjusted": 16405167.18,
+          "onbalancesheetreserveunadjusted": 16405167.18,
+          "netchargeoffamount": 0.0,
+          "offbalancesheetreserve": 11648568.99,
+          "offbalancesheeteadamountlifetime": 1220971656.53
+        },
+        {
+          "portfolioidentifier": "US South Regional Bank Demo (ISv2)",
+          "ascimpairmentevaluation": "Collectively Evaluated",
+          "lossratemodelname": NaN,
+          "pdmodelname": "MA Public Firm TTC to PIT PD Converter",
+          "lgdmodelname": "RiskCalc LGD",
+          "amortizedcost": 4126717147.0,
+          "onbalancesheetreserveadjusted": 55023205.87,
+          "onbalancesheetreserveunadjusted": 55023205.87,
+          "netchargeoffamount": 0.0,
+          "offbalancesheetreserve": 26661416.69,
+          "offbalancesheeteadamountlifetime": 1719875630.29
+        },
+        {
+          "portfolioidentifier": "US South Regional Bank Demo (ISv2)",
+          "ascimpairmentevaluation": "Individually Evaluated",
+          "lossratemodelname": NaN,
+          "pdmodelname": "Instrument Preset",
+          "lgdmodelname": "Instrument Preset",
+          "amortizedcost": 1394581419.38,
+          "onbalancesheetreserveadjusted": 17153862.06,
+          "onbalancesheetreserveunadjusted": 17153862.06,
+          "netchargeoffamount": 0.0,
+          "offbalancesheetreserve": 777879.97,
+          "offbalancesheeteadamountlifetime": 326257105.4
+        },
+        {
+          "portfolioidentifier": "US South Regional Bank Demo (ISv2)",
+          "ascimpairmentevaluation": "Individually Evaluated",
+          "lossratemodelname": NaN,
+          "pdmodelname": "MA Private Firm TTC to PIT PD Converter",
+          "lgdmodelname": "RiskCalc LGD",
+          "amortizedcost": 208561932.9,
+          "onbalancesheetreserveadjusted": 1544506.62,
+          "onbalancesheetreserveunadjusted": 1544506.62,
+          "netchargeoffamount": 0.0,
+          "offbalancesheetreserve": 574139.68,
+          "offbalancesheeteadamountlifetime": 100077824.5
+        },
+        {
+          "portfolioidentifier": NaN,
+          "ascimpairmentevaluation": "Collectively Evaluated",
+          "lossratemodelname": NaN,
+          "pdmodelname": "Instrument Preset",
+          "lgdmodelname": "RiskCalc LGD",
+          "amortizedcost": 0.0,
+          "onbalancesheetreserveadjusted": 0.0,
+          "onbalancesheetreserveunadjusted": 0.0,
+          "netchargeoffamount": 0.0,
+          "offbalancesheetreserve": 0.0,
+          "offbalancesheeteadamountlifetime": 0.0
+        }
+      ],
+      "groupedSummaryTotalRows": 8
+    },
+    "4647909": {
+      "refRows": 20854,
+      "resultRows": 20853,
+      "reportingRows": 20853,
+      "mergedRows": 20854,
+      "groupBy": [
+        "portfolioidentifier",
+        "ascimpairmentevaluation",
+        "lossratemodelname",
+        "pdmodelname",
+        "lgdmodelname"
+      ],
+      "groupedSummary": [
+        {
+          "portfolioidentifier": "US South Regional Bank Demo (ISv2)",
+          "ascimpairmentevaluation": "Collectively Evaluated",
+          "lossratemodelname": NaN,
+          "pdmodelname": "EDF-X",
+          "lgdmodelname": "Instrument Preset",
+          "amortizedcost": 5611303523.92,
+          "onbalancesheetreserveadjusted": 28138406.51,
+          "onbalancesheetreserveunadjusted": 28138406.51,
+          "netchargeoffamount": 0.0,
+          "offbalancesheetreserve": 0.0,
+          "offbalancesheeteadamountlifetime": 0.0
+        },
+        {
+          "portfolioidentifier": "US South Regional Bank Demo (ISv2)",
+          "ascimpairmentevaluation": "Collectively Evaluated",
+          "lossratemodelname": NaN,
+          "pdmodelname": "Instrument Preset",
+          "lgdmodelname": "Instrument Preset",
+          "amortizedcost": 32097826214.34,
+          "onbalancesheetreserveadjusted": 243734256.67,
+          "onbalancesheetreserveunadjusted": 243734256.67,
+          "netchargeoffamount": 0.0,
+          "offbalancesheetreserve": 85732478.46,
+          "offbalancesheeteadamountlifetime": 12167523558.2
+        },
+        {
+          "portfolioidentifier": "US South Regional Bank Demo (ISv2)",
+          "ascimpairmentevaluation": "Collectively Evaluated",
+          "lossratemodelname": NaN,
+          "pdmodelname": "Instrument Preset",
+          "lgdmodelname": "RiskCalc LGD",
+          "amortizedcost": 24763151424.09,
+          "onbalancesheetreserveadjusted": 275606488.12,
+          "onbalancesheetreserveunadjusted": 275606488.12,
+          "netchargeoffamount": 0.0,
+          "offbalancesheetreserve": 87527988.34,
+          "offbalancesheeteadamountlifetime": 8742037876.75
+        },
+        {
+          "portfolioidentifier": "US South Regional Bank Demo (ISv2)",
+          "ascimpairmentevaluation": "Collectively Evaluated",
+          "lossratemodelname": NaN,
+          "pdmodelname": "MA Private Firm TTC to PIT PD Converter",
+          "lgdmodelname": "RiskCalc LGD",
+          "amortizedcost": 2441721940.18,
+          "onbalancesheetreserveadjusted": 16950423.3,
+          "onbalancesheetreserveunadjusted": 16950423.3,
+          "netchargeoffamount": 0.0,
+          "offbalancesheetreserve": 11492698.83,
+          "offbalancesheeteadamountlifetime": 1199040010.47
+        },
+        {
+          "portfolioidentifier": "US South Regional Bank Demo (ISv2)",
+          "ascimpairmentevaluation": "Collectively Evaluated",
+          "lossratemodelname": NaN,
+          "pdmodelname": "MA Public Firm TTC to PIT PD Converter",
+          "lgdmodelname": "RiskCalc LGD",
+          "amortizedcost": 4126717147.0,
+          "onbalancesheetreserveadjusted": 42878906.91,
+          "onbalancesheetreserveunadjusted": 42878906.91,
+          "netchargeoffamount": 0.0,
+          "offbalancesheetreserve": 23163780.98,
+          "offbalancesheeteadamountlifetime": 1739547507.48
+        },
+        {
+          "portfolioidentifier": "US South Regional Bank Demo (ISv2)",
+          "ascimpairmentevaluation": "Individually Evaluated",
+          "lossratemodelname": NaN,
+          "pdmodelname": "Instrument Preset",
+          "lgdmodelname": "Instrument Preset",
+          "amortizedcost": 1480674956.73,
+          "onbalancesheetreserveadjusted": 18020665.74,
+          "onbalancesheetreserveunadjusted": 18020665.74,
+          "netchargeoffamount": 0.0,
+          "offbalancesheetreserve": 783901.85,
+          "offbalancesheeteadamountlifetime": 296105762.99
+        },
+        {
+          "portfolioidentifier": "US South Regional Bank Demo (ISv2)",
+          "ascimpairmentevaluation": "Individually Evaluated",
+          "lossratemodelname": NaN,
+          "pdmodelname": "MA Private Firm TTC to PIT PD Converter",
+          "lgdmodelname": "RiskCalc LGD",
+          "amortizedcost": 217717268.11,
+          "onbalancesheetreserveadjusted": 1551934.62,
+          "onbalancesheetreserveunadjusted": 1551934.62,
+          "netchargeoffamount": 0.0,
+          "offbalancesheetreserve": 580592.42,
+          "offbalancesheeteadamountlifetime": 97804725.67
+        },
+        {
+          "portfolioidentifier": NaN,
+          "ascimpairmentevaluation": "Collectively Evaluated",
+          "lossratemodelname": NaN,
+          "pdmodelname": "Instrument Preset",
+          "lgdmodelname": "RiskCalc LGD",
+          "amortizedcost": 0.0,
+          "onbalancesheetreserveadjusted": 0.0,
+          "onbalancesheetreserveunadjusted": 0.0,
+          "netchargeoffamount": 0.0,
+          "offbalancesheetreserve": 0.0,
+          "offbalancesheeteadamountlifetime": 0.0
+        }
+      ],
+      "groupedSummaryTotalRows": 8
+    }
+  }
+}

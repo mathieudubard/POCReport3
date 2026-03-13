@@ -496,9 +496,20 @@ class Model:
 
         segment_methodology = []
         if df_ref_current is not None and not df_ref_current.empty:
-            port_col = self._find_column_flexible(df_ref_current, "portfolioIdentifier", "portfolioidentifier")
+            # Try flexible match first (handles Portfolio Identifier, portfolio_identifier, etc.)
+            port_col = self._find_column_flexible(
+                df_ref_current,
+                "portfolioIdentifier",
+                "portfolioidentifier",
+                "Portfolio Identifier",
+                "portfolio_identifier",
+            )
+            if port_col is None:
+                port_col = self._find_column(df_ref_current, "portfolioIdentifier")
             lr_col, pd_col, lgd_col = self._get_methodology_columns(df_ref_current)
             model_cols = [c for c in (lr_col, pd_col, lgd_col) if c is not None]
+            print("[hanmi_acl_report] segmentMethodology: ref_cols_sample={}, port_col={}, model_cols={}".format(
+                list(df_ref_current.columns)[:20], port_col, model_cols))
             if port_col:
                 dup = df_ref_current[[port_col] + model_cols].drop_duplicates() if model_cols else df_ref_current[[port_col]].drop_duplicates()
                 for _, row in dup.iterrows():
@@ -509,7 +520,6 @@ class Model:
                     len(df_ref_current), len(dup), len(segment_methodology)))
             else:
                 all_cols = list(df_ref_current.columns)
-                # Log columns that might be segment/portfolio (case-insensitive)
                 port_like = [c for c in all_cols if c and "port" in str(c).lower()]
                 print("[hanmi_acl_report] segmentMethodology: SKIP - portfolioIdentifier not found in ref (port-like cols: {}, total cols: {})".format(
                     port_like[:10] if port_like else "none", len(all_cols)))
