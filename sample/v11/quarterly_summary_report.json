@@ -1,0 +1,48 @@
+{
+  "currentAnalysisId": 4647997,
+  "priorAnalysisId": 4647909,
+  "sections": [
+    {
+      "type": "changesToAcl",
+      "beginningACL": 836162522.7260324,
+      "chargeOffs": 9435150.0,
+      "recoveries": 2620875.0,
+      "provision": -54001958.51340491,
+      "endingACL": 796574594.4636916
+    },
+    {
+      "type": "collectivelyEvaluated",
+      "collectivelyEvaluatedExposure": 132966272101.86002,
+      "quantitativeReserveAmount": 1157507337.9698203,
+      "qualitativeReserveAmount": 0.0,
+      "totalCollectiveReserveAmount": 1157507337.9698203,
+      "quantitativeReserveToExposure": 0.008705270289018114,
+      "qualitativeReserveToExposure": 0.0,
+      "totalCollectiveReserveToExposure": 0.008705270289018114
+    },
+    {
+      "type": "individuallyEvaluated",
+      "individuallyEvaluatedExposure": 3206286704.56,
+      "individualReserveAmount": 37396737.34351824,
+      "individualReserveToExposure": 0.011663566233903033
+    },
+    {
+      "type": "totalReserveRequirements",
+      "totalExposure": 136172558806.42001,
+      "totalReserves": 796574594.4636916,
+      "totalReservesToTotalExposure": 0.005849743894407426
+    },
+    {
+      "type": "unfundedCommitmentLiabilities",
+      "unfundedExposure": 47085544913.13512,
+      "unfundedReserveAmount": 199122556.8070223,
+      "totalUnfundedExposure": 47085544913.13512
+    },
+    {
+      "type": "qtdCreditLossExpense",
+      "provisionExpense": 1569037138.9273832,
+      "unfundedProvisionExpense": 0.0,
+      "totalQtdCreditLossExpense": 1569037138.9273832
+    }
+  ]
+}

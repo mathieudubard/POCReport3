@@ -28,7 +28,7 @@ Compact context for agents. See README.md for full project layout.
    - **instrumentResult:** For each analysis ID, list/download from `output/instrumentResult/analysisidentifier={id}/scenarioidentifier=Summary/` into that analysis’s local `instrumentResult` dir.
    - **instrumentReporting:** For each analysis ID, list all `*.parquet` under `output/instrumentReporting/analysisidentifier={id}/` (no subfolder) and download into `inputPaths/instrumentReporting` dir per analysis.
    - **instrumentReference:** For each analysis ID, list all `*.parquet` under `output/instrumentReference/analysisidentifier={id}/` (including all `portfolioidentifier=.../` subfolders) and download into `inputPaths/instrumentReference` dir per analysis; relative subpath preserved locally to avoid name clashes.
-   - **create_io_directories** creates local dirs for `instrumentReporting`, `instrumentReference`, and `macroEconomicVariableInput` from `analysisIds` when callback is True (same pattern as instrumentResult).
+   - **create_io_directories** creates local dirs for `instrumentResult`, `instrumentReporting`, `instrumentReference`, and `macroEconomicVariableInput` from `analysisIds` when callback is True.
    - Non-callback path: still uses `inputPath` with `custInputs` and downloads from execution input.
 
 4. **Report step (model.py)**  
@@ -58,6 +58,15 @@ Compact context for agents. See README.md for full project layout.
 | **model.py** | `build_quarterly_summary_report()` (Step 3); `_load_parquet_for_analysis()`, `_find_column()`, `_filter_summary_scenario()`, `_safe_sum()` |
 | **Report dir** | `io_session.local_directories['outputPaths']['report']` |
 | **Datamodel** | `datamodel/ImpairmentStudio-DataDictionary.csv` — Instrument Result: `analysisIdentifier`, `assetClass`, `lossAllowanceDelta` |
+| **Column lookup** | **`docs/DATAMODEL_COLUMNS.md`** — Report section → category → canonical attribute name. All report/debug lookups use **`_resolve_column(df, canonical_name, *variants)`** so parquet with lowercase/spaced column names still match. |
+
+---
+
+## Column resolution (avoid empty sections)
+
+- **Canonical names** come from `datamodel/ImpairmentStudio-DataDictionary.csv` (Attribute Name column). Parquet may expose columns as lowercase (e.g. `portfolioidentifier`) or with spaces; the code tries canonical first, then **`_resolve_column`** with variants (`portfolioidentifier`, `Portfolio Identifier`, `portfolio_identifier` etc.).
+- **Use `_resolve_column`** for any report-related column lookup (portfolio, ascImpairmentEvaluation, lossRateModelName, pdModelName, lgdModelName). Use **`_find_column`** for join keys (instrumentIdentifier, analysisIdentifier) and scenarioIdentifier (case-insensitive match is enough).
+- **Same resolution in debug:** `_build_debug_all_data_summary` uses `_resolve_column` for port/asc/lr/pd/lgd so debug and report find the same columns. If segmentMethodology is empty but debug_all_data_summary has groupBy data, the run was likely using an older build; re-run with current code.
 
 ---
 

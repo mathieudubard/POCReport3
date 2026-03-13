@@ -65,6 +65,39 @@ class TestModelHelpers(unittest.TestCase):
         self.assertEqual(self.model._find_column(df, "foo"), "Foo")
         self.assertIsNone(self.model._find_column(df, "missing"))
 
+    def test_resolve_column_canonical_found(self):
+        """_resolve_column returns column when canonical (datamodel) name matches."""
+        df = pd.DataFrame({"portfolioIdentifier": ["P1"], "v": [1]})
+        self.assertEqual(self.model._resolve_column(df, "portfolioIdentifier"), "portfolioIdentifier")
+        self.assertEqual(self.model._resolve_column(df, "portfolioIdentifier", "portfolioidentifier"), "portfolioIdentifier")
+
+    def test_resolve_column_flexible_variant_found(self):
+        """_resolve_column finds column via flexible variant when canonical not present (e.g. lowercase parquet)."""
+        df = pd.DataFrame({"portfolioidentifier": ["P1"], "ascimpairmentevaluation": ["Collective"]})
+        self.assertEqual(self.model._resolve_column(df, "portfolioIdentifier", "portfolioidentifier"), "portfolioidentifier")
+        self.assertEqual(self.model._resolve_column(df, "ascImpairmentEvaluation", "ascimpairmentevaluation"), "ascimpairmentevaluation")
+
+    def test_resolve_column_not_found(self):
+        """_resolve_column returns None when neither canonical nor variants match."""
+        df = pd.DataFrame({"other": [1]})
+        self.assertIsNone(self.model._resolve_column(df, "portfolioIdentifier", "portfolioidentifier"))
+        self.assertIsNone(self.model._resolve_column(None, "x"))
+
+    def test_get_methodology_columns_and_methodology_from_row(self):
+        """_get_methodology_columns and _methodology_from_row use PD/LGD when lossRate missing."""
+        df = pd.DataFrame({
+            "instrumentIdentifier": ["i1"],
+            "portfolioidentifier": ["Seg1"],
+            "pdmodelname": ["MA PD Model"],
+            "lgdmodelname": ["RiskCalc LGD"],
+        })
+        lr, pd_col, lgd_col = self.model._get_methodology_columns(df)
+        self.assertIsNone(lr)
+        self.assertEqual(pd_col, "pdmodelname")
+        self.assertEqual(lgd_col, "lgdmodelname")
+        row = df.iloc[0]
+        self.assertEqual(self.model._methodology_from_row(row, lr, pd_col, lgd_col), "MA PD Model")
+
     def test_safe_sum_present(self):
         df = pd.DataFrame({"a": [1.0, 2.0, 3.0]})
         self.assertEqual(self.model._safe_sum(df, "a"), 6.0)
@@ -274,6 +307,39 @@ class TestBuildHanmiAclQuarterlyReport(unittest.TestCase):
         self.assertEqual(len(macro), 2)
         self.assertEqual(macro[0]["variableName"], "USA Unemployment Rate")
         self.assertEqual(macro[0]["value"], 4.1)
+
+    def test_segment_methodology_populated_with_lowercase_ref_columns(self):
+        """segmentMethodology is populated when ref has lowercase columns (portfolioidentifier, pdmodelname)."""
+        ref = pd.DataFrame({
+            "instrumentIdentifier": ["i1", "i2"],
+            "analysisIdentifier": ["c1", "c1"],
+            "portfolioidentifier": ["Seg A", "Seg A"],
+            "ascimpairmentevaluation": ["Collectively Evaluated", "Collectively Evaluated"],
+            "pdmodelname": ["EDF-X", "EDF-X"],
+            "lgdmodelname": ["Instrument Preset", "Instrument Preset"],
+        })
+        res = pd.DataFrame({
+            "instrumentIdentifier": ["i1", "i2"],
+            "analysisIdentifier": ["c1", "c1"],
+            "amortizedCost": [100.0, 200.0],
+            "onBalanceSheetReserveAdjusted": [1.0, 2.0],
+            "onBalanceSheetReserveUnadjusted": [1.0, 2.0],
+        })
+        def load_mock(category, analysis_id, filter_summary=False):
+            if category == "instrumentResult" and analysis_id == "c1":
+                return res.copy()
+            if category == "instrumentReference" and analysis_id == "c1":
+                return ref.copy()
+            return None
+        self.model._load_parquet_for_analysis = load_mock
+        self.model.build_hanmi_acl_quarterly_report()
+        path = os.path.join(self.report_dir, "hanmi_acl_quarterly_report.json")
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        seg_meth = data["segmentMethodology"]
+        self.assertGreater(len(seg_meth), 0, "segmentMethodology should be populated when ref has portfolioidentifier/pdmodelname")
+        self.assertEqual(seg_meth[0]["segment"], "Seg A")
+        self.assertEqual(seg_meth[0]["methodology"], "EDF-X")
 
 
 class TestCreateReportExportZip(unittest.TestCase):

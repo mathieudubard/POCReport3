@@ -125,13 +125,28 @@ class Model:
                 return c
         return None
 
+    def _resolve_column(self, df, canonical_name, *flexible_variants):
+        """
+        Resolve column using datamodel canonical name first, then flexible variants.
+        Use for all report-related lookups so parquet with lowercase/spaced names still match.
+        Canonical names from datamodel/ImpairmentStudio-DataDictionary.csv (Attribute Name column).
+        """
+        if df is None or df.empty:
+            return None
+        c = self._find_column(df, canonical_name)
+        if c is not None:
+            return c
+        if flexible_variants:
+            return self._find_column_flexible(df, canonical_name, *flexible_variants)
+        return None
+
     def _get_methodology_columns(self, df):
-        """Return (lossRateModelName_col, pdModelName_col, lgdModelName_col) for ref; any may be None."""
+        """Return (lossRateModelName_col, pdModelName_col, lgdModelName_col) for ref; any may be None. Uses same resolution as report (datamodel + flexible)."""
         if df is None or df.empty:
             return None, None, None
-        lr = self._find_column_flexible(df, "lossRateModelName", "lossratemodelname")
-        pd = self._find_column_flexible(df, "pdModelName", "pdmodelname")
-        lgd = self._find_column_flexible(df, "lgdModelName", "lgdmodelname")
+        lr = self._resolve_column(df, "lossRateModelName", "lossratemodelname")
+        pd = self._resolve_column(df, "pdModelName", "pdmodelname")
+        lgd = self._resolve_column(df, "lgdModelName", "lgdmodelname")
         return lr, pd, lgd
 
     def _methodology_from_row(self, row, lr_col, pd_col, lgd_col):
@@ -344,12 +359,12 @@ class Model:
         if df_ref_current is not None and not df_ref_current.empty and df_current is not None and not df_current.empty:
             id_col_res = self._find_column(df_current, "instrumentIdentifier")
             id_col_ref = self._find_column(df_ref_current, "instrumentIdentifier")
-            asc_ref = self._find_column(df_ref_current, "ascImpairmentEvaluation")
+            asc_ref = self._resolve_column(df_ref_current, "ascImpairmentEvaluation", "ascimpairmentevaluation")
             if id_col_res and id_col_ref and asc_ref:
                 ref_sub = df_ref_current[[id_col_ref, asc_ref]].drop_duplicates()
                 df_current_with_ref = df_current.merge(ref_sub, left_on=id_col_res, right_on=id_col_ref, how="left")
         _df_for_asc = pd.DataFrame() if df_current_with_ref is None or df_current_with_ref.empty else df_current_with_ref
-        asc_col = self._find_column(_df_for_asc, "ascImpairmentEvaluation")
+        asc_col = self._resolve_column(_df_for_asc, "ascImpairmentEvaluation", "ascimpairmentevaluation")
         if asc_col and df_current_with_ref is not None and not df_current_with_ref.empty:
             collective = df_current_with_ref[df_current_with_ref[asc_col].astype(str).str.strip().str.lower().str.contains("collective", na=False)]
             adj_col = self._find_column(collective, "onBalanceSheetReserveAdjusted")
@@ -478,9 +493,11 @@ class Model:
             print("[hanmi_acl_report] result current: rows={}, cols={}, instrumentId={}".format(
                 len(df_current), list(df_current.columns)[:15], "ok" if id_c else "MISSING"))
         if df_ref_current is not None and not df_ref_current.empty:
-            port_c = self._find_column(df_ref_current, "portfolioIdentifier")
-            asc_c = self._find_column(df_ref_current, "ascImpairmentEvaluation")
-            model_c = self._find_column(df_ref_current, "lossRateModelName") or self._find_column(df_ref_current, "pdModelName")
+            port_c = self._resolve_column(df_ref_current, "portfolioIdentifier", "portfolioidentifier", "Portfolio Identifier", "portfolio_identifier")
+            asc_c = self._resolve_column(df_ref_current, "ascImpairmentEvaluation", "ascimpairmentevaluation")
+            lr_c = self._resolve_column(df_ref_current, "lossRateModelName", "lossratemodelname")
+            pd_c = self._resolve_column(df_ref_current, "pdModelName", "pdmodelname")
+            model_c = lr_c or pd_c
             uniq_asc = df_ref_current[asc_c].dropna().astype(str).unique().tolist()[:5] if asc_c else []
             uniq_port = df_ref_current[port_c].dropna().astype(str).unique().tolist()[:5] if port_c else []
             print("[hanmi_acl_report] ref current: portfolioIdentifier={}, ascImpairmentEvaluation={}, modelCol={}, sample asc={}, sample port={}".format(
@@ -496,20 +513,12 @@ class Model:
 
         segment_methodology = []
         if df_ref_current is not None and not df_ref_current.empty:
-            # Try flexible match first (handles Portfolio Identifier, portfolio_identifier, etc.)
-            port_col = self._find_column_flexible(
-                df_ref_current,
-                "portfolioIdentifier",
-                "portfolioidentifier",
-                "Portfolio Identifier",
-                "portfolio_identifier",
+            port_col = self._resolve_column(
+                df_ref_current, "portfolioIdentifier",
+                "portfolioidentifier", "Portfolio Identifier", "portfolio_identifier",
             )
-            if port_col is None:
-                port_col = self._find_column(df_ref_current, "portfolioIdentifier")
             lr_col, pd_col, lgd_col = self._get_methodology_columns(df_ref_current)
             model_cols = [c for c in (lr_col, pd_col, lgd_col) if c is not None]
-            print("[hanmi_acl_report] segmentMethodology: ref_cols_sample={}, port_col={}, model_cols={}".format(
-                list(df_ref_current.columns)[:20], port_col, model_cols))
             if port_col:
                 dup = df_ref_current[[port_col] + model_cols].drop_duplicates() if model_cols else df_ref_current[[port_col]].drop_duplicates()
                 for _, row in dup.iterrows():
@@ -521,8 +530,8 @@ class Model:
             else:
                 all_cols = list(df_ref_current.columns)
                 port_like = [c for c in all_cols if c and "port" in str(c).lower()]
-                print("[hanmi_acl_report] segmentMethodology: SKIP - portfolioIdentifier not found in ref (port-like cols: {}, total cols: {})".format(
-                    port_like[:10] if port_like else "none", len(all_cols)))
+                print("[hanmi_acl_report] segmentMethodology: SKIP - portfolioIdentifier not found (ref_cols_sample={}, port-like={})".format(
+                    all_cols[:20], port_like[:10] if port_like else "none"))
         else:
             print("[hanmi_acl_report] segmentMethodology: SKIP - df_ref_current empty or None")
 
@@ -530,7 +539,7 @@ class Model:
         if df_current is not None and not df_current.empty and df_ref_current is not None and not df_ref_current.empty:
             id_res = self._find_column(df_current, "instrumentIdentifier")
             id_ref = self._find_column(df_ref_current, "instrumentIdentifier")
-            asc_col = self._find_column(df_ref_current, "ascImpairmentEvaluation")
+            asc_col = self._resolve_column(df_ref_current, "ascImpairmentEvaluation", "ascimpairmentevaluation")
             lr_col, pd_col, lgd_col = self._get_methodology_columns(df_ref_current)
             model_cols = [c for c in (lr_col, pd_col, lgd_col) if c is not None]
             left_on, right_on = self._join_keys_and_log(df_current, df_ref_current, "result", "ref", current_id)
@@ -583,7 +592,7 @@ class Model:
                 continue
             id_res = self._find_column(df_res, "instrumentIdentifier")
             id_ref = self._find_column(df_ref, "instrumentIdentifier")
-            port_ref = self._find_column(df_ref, "portfolioIdentifier")
+            port_ref = self._resolve_column(df_ref, "portfolioIdentifier", "portfolioidentifier", "Portfolio Identifier", "portfolio_identifier")
             if not id_res or not id_ref or not port_ref:
                 print("[hanmi_acl_report] quantitativeLossRates: analysisId={} SKIP - id_res={}, id_ref={}, port_ref={}".format(
                     analysis_id, bool(id_res), bool(id_ref), bool(port_ref)))
@@ -615,7 +624,7 @@ class Model:
             net_col = self._find_column(df_reporting_current, "netChargeOffAmount")
             gco_col = self._find_column(df_reporting_current, "grossChargeOffAmount")
             rec_col = self._find_column(df_reporting_current, "recoveryAmount")
-            port_col = self._find_column(df_reporting_current, "portfolioIdentifier")
+            port_col = self._resolve_column(df_reporting_current, "portfolioIdentifier", "portfolioidentifier", "Portfolio Identifier", "portfolio_identifier")
             if port_col:
                 for portfolio, grp in df_reporting_current.groupby(port_col, dropna=False):
                     net = grp[net_col].sum() if net_col else ((grp[gco_col].sum() - grp[rec_col].sum()) if (gco_col and rec_col) else 0.0)
@@ -634,7 +643,7 @@ class Model:
         if df_current is not None and not df_current.empty and df_ref_current is not None:
             id_res = self._find_column(df_current, "instrumentIdentifier")
             id_ref = self._find_column(df_ref_current, "instrumentIdentifier")
-            port_ref = self._find_column(df_ref_current, "portfolioIdentifier")
+            port_ref = self._resolve_column(df_ref_current, "portfolioIdentifier", "portfolioidentifier", "Portfolio Identifier", "portfolio_identifier")
             if id_res and id_ref and port_ref:
                 ref_sub = df_ref_current[[id_ref, port_ref]].drop_duplicates()
                 merged = df_current.merge(ref_sub, left_on=id_res, right_on=id_ref, how="left")
@@ -675,7 +684,7 @@ class Model:
         if df_current is not None and df_ref_current is not None and not df_ref_current.empty:
             id_res = self._find_column(df_current, "instrumentIdentifier")
             id_ref = self._find_column(df_ref_current, "instrumentIdentifier")
-            asc_col = self._find_column(df_ref_current, "ascImpairmentEvaluation")
+            asc_col = self._resolve_column(df_ref_current, "ascImpairmentEvaluation", "ascimpairmentevaluation")
             left_on, right_on = self._join_keys_and_log(df_current, df_ref_current, "result", "ref", current_id)
             if id_res and id_ref and asc_col and left_on is not None:
                 ref_sub = df_ref_current[right_on + [asc_col]].drop_duplicates()
@@ -701,7 +710,7 @@ class Model:
         if df_current is not None and not df_current.empty and df_ref_current is not None:
             id_res = self._find_column(df_current, "instrumentIdentifier")
             id_ref = self._find_column(df_ref_current, "instrumentIdentifier")
-            port_ref = self._find_column(df_ref_current, "portfolioIdentifier")
+            port_ref = self._resolve_column(df_ref_current, "portfolioIdentifier", "portfolioidentifier", "Portfolio Identifier", "portfolio_identifier")
             ead_col = self._find_column(df_current, "offBalanceSheetEADAmountLifetime")
             res_col = self._find_column(df_current, "offBalanceSheetReserve")
             print("[hanmi_acl_report] unfundedBySegment: ead_col={}, res_col={}, id_res={}, port_ref={}".format(
@@ -808,12 +817,12 @@ class Model:
                 if left_rep is not None:
                     merged = merged.merge(df_rep, left_on=left_rep, right_on=right_rep, how="left", suffixes=("", "_rep"))
                     merged_rows = len(merged)
-            # Group by key dimensions (from ref): portfolio, evaluation type, loss rate / PD / LGD model
-            port_col = self._find_column(merged, "portfolioIdentifier")
-            asc_col = self._find_column(merged, "ascImpairmentEvaluation")
-            lr_col = self._find_column(merged, "lossRateModelName")
-            pd_col = self._find_column(merged, "pdModelName")
-            lgd_col = self._find_column(merged, "lgdModelName")
+            # Group by key dimensions (from ref): use same resolution as report to avoid mismatch
+            port_col = self._resolve_column(merged, "portfolioIdentifier", "portfolioidentifier", "Portfolio Identifier", "portfolio_identifier")
+            asc_col = self._resolve_column(merged, "ascImpairmentEvaluation", "ascimpairmentevaluation")
+            lr_col = self._resolve_column(merged, "lossRateModelName", "lossratemodelname")
+            pd_col = self._resolve_column(merged, "pdModelName", "pdmodelname")
+            lgd_col = self._resolve_column(merged, "lgdModelName", "lgdmodelname")
             group_cols = [c for c in [port_col, asc_col, lr_col, pd_col, lgd_col] if c is not None and c in merged.columns]
             if not group_cols:
                 group_cols = [c for c in merged.columns if merged[c].nunique() < 100][:3]

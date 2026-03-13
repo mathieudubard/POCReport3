@@ -26,3 +26,9 @@ eyJraWQiOiJNV1JoWXpRNFpHRTRaakZrTXpkbVptWTNaV1kwWlRCalpEUTVOemsxTTJNM05XRmxZamRt
  {"runName": "Run Report","modelName": "modelGeneratorWrapper","analysisIds": [4647997,4647909]}
 
  Testing commitID
+
+--- Pre-run checklist (clean run) ---
+- Run tests: python -m pytest tests/ -v
+- Column resolution: All report sections use _resolve_column(); canonical names from datamodel/ImpairmentStudio-DataDictionary.csv (see docs/DATAMODEL_COLUMNS.md). Parquet columns may be camelCase or lowercase; both resolve.
+- If segmentMethodology/quantitative/qualitative are empty: check logs for "SKIP - portfolioIdentifier not found"; ref_cols_sample shows actual ref column names.
+- Security: Do not commit JWT, Bearer tokens, or API secrets to the repo.
