@@ -25,7 +25,7 @@ eyJraWQiOiJNV1JoWXpRNFpHRTRaakZrTXpkbVptWTNaV1kwWlRCalpEUTVOemsxTTJNM05XRmxZamRt
  
  {"runName": "Run Report","modelName": "modelGeneratorWrapper","analysisIds": [4647997,4647909]}
 
- Testing commitID and Analysis payload. New version.
+ Testing commitID and Analysis payload. New version. Trying for v18.
 
 --- Pre-run checklist (clean run) ---
 - Run tests: python -m pytest tests/ -v
