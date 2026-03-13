@@ -23,6 +23,24 @@ REPORT_MACRO_VARIABLE_NAMES = [
 REPORT_MACRO_QUARTERS_BACK = 4
 REPORT_MACRO_QUARTERS_FORWARD = 4
 
+# Segmentation dimensions from datamodel (instrumentReference): try in order; first found with non-null values wins.
+# Each entry: (canonical_name, *flexible_variants for _resolve_column).
+SEGMENT_DIMENSION_CANDIDATES = [
+    ("portfolioIdentifier", "portfolioidentifier", "Portfolio Identifier", "portfolio_identifier"),
+    ("assetClass", "assetclass", "Asset Class", "asset_class"),
+    ("assetSubClass1", "assetsubclass1", "Asset Sub Class 1", "asset_sub_class_1"),
+    ("assetSubClass2", "assetsubclass2", "Asset Sub Class 2", "asset_sub_class_2"),
+    ("portfolioSubType1", "portfoliosubtype1", "Portfolio Sub Type 1", "portfolio_sub_type_1"),
+    ("portfolioSubType2", "portfoliosubtype2", "Portfolio Sub Type 2", "portfolio_sub_type_2"),
+    ("instrumentSubType", "instrumentsubtype", "Instrument Sub Type", "instrument_sub_type"),
+    ("consumerProductCategory", "consumerproductcategory", "Consumer Product Category", "consumer_product_category"),
+    ("productType", "producttype", "Product Type", "product_type"),
+    ("usRegion", "usregion", "US Region", "us_region"),
+    ("entityType", "entitytype", "Entity Type", "entity_type"),
+    ("locationType", "locationtype", "Location Type", "location_type"),
+    ("instrumentType", "instrumenttype", "Instrument Type", "instrument_type"),
+]
+
 class Model:
     """
     Main model class.
@@ -148,6 +166,41 @@ class Model:
         pd = self._resolve_column(df, "pdModelName", "pdmodelname")
         lgd = self._resolve_column(df, "lgdModelName", "lgdmodelname")
         return lr, pd, lgd
+
+    def _get_segment_column(self, df):
+        """
+        Return (canonical_name, resolved_col) for the first segmentation dimension present in df with at least one non-null value.
+        Uses SEGMENT_DIMENSION_CANDIDATES (datamodel: portfolioIdentifier, assetClass, assetSubClass1, ...). Enables segmentMethodology/quantitative/qualitative from any available segment dimension.
+        """
+        if df is None or df.empty:
+            return None, None
+        for item in SEGMENT_DIMENSION_CANDIDATES:
+            canonical = item[0]
+            variants = item[1:] if len(item) > 1 else ()
+            col = self._resolve_column(df, canonical, *variants)
+            if col is not None and col in df.columns:
+                non_null = df[col].notna() & (df[col].astype(str).str.strip() != "")
+                if non_null.any():
+                    return canonical, col
+        return None, None
+
+    def _get_segmentation_candidates_for_debug(self, df):
+        """Build a dict of segmentation candidate name -> {found, column, distinct, sample} for debug JSON."""
+        if df is None or df.empty:
+            return {}
+        out = {}
+        all_cols = list(df.columns)
+        for item in SEGMENT_DIMENSION_CANDIDATES:
+            canonical = item[0]
+            variants = item[1:] if len(item) > 1 else ()
+            col = self._resolve_column(df, canonical, *variants)
+            if col is not None and col in df.columns:
+                uniq = df[col].dropna().astype(str).str.strip()
+                uniq = uniq[uniq != ""].unique().tolist()
+                out[canonical] = {"found": True, "column": col, "distinct": len(uniq), "sample": uniq[:15]}
+            else:
+                out[canonical] = {"found": False}
+        return out
 
     def _methodology_from_row(self, row, lr_col, pd_col, lgd_col):
         """First non-null of lossRate, pdModel, lgdModel for display/grouping to avoid nulls."""
@@ -512,26 +565,22 @@ class Model:
         }
 
         segment_methodology = []
+        segment_dim_name, segment_col = None, None
         if df_ref_current is not None and not df_ref_current.empty:
-            port_col = self._resolve_column(
-                df_ref_current, "portfolioIdentifier",
-                "portfolioidentifier", "Portfolio Identifier", "portfolio_identifier",
-            )
+            segment_dim_name, segment_col = self._get_segment_column(df_ref_current)
             lr_col, pd_col, lgd_col = self._get_methodology_columns(df_ref_current)
             model_cols = [c for c in (lr_col, pd_col, lgd_col) if c is not None]
-            if port_col:
-                dup = df_ref_current[[port_col] + model_cols].drop_duplicates() if model_cols else df_ref_current[[port_col]].drop_duplicates()
+            if segment_col:
+                dup = df_ref_current[[segment_col] + model_cols].drop_duplicates() if model_cols else df_ref_current[[segment_col]].drop_duplicates()
                 for _, row in dup.iterrows():
-                    seg = str(row[port_col]) if pd.notna(row[port_col]) else ""
+                    seg = str(row[segment_col]) if pd.notna(row[segment_col]) else ""
                     meth = self._methodology_from_row(row, lr_col, pd_col, lgd_col)
                     segment_methodology.append({"segment": seg, "methodology": meth})
-                print("[hanmi_acl_report] segmentMethodology: ref rows={}, distinct (port+model)={}, output rows={}".format(
-                    len(df_ref_current), len(dup), len(segment_methodology)))
+                print("[hanmi_acl_report] segmentMethodology: dimension={}, ref rows={}, distinct={}, output rows={}".format(
+                    segment_dim_name or segment_col, len(df_ref_current), len(dup), len(segment_methodology)))
             else:
                 all_cols = list(df_ref_current.columns)
-                port_like = [c for c in all_cols if c and "port" in str(c).lower()]
-                print("[hanmi_acl_report] segmentMethodology: SKIP - portfolioIdentifier not found (ref_cols_sample={}, port-like={})".format(
-                    all_cols[:20], port_like[:10] if port_like else "none"))
+                print("[hanmi_acl_report] segmentMethodology: SKIP - no segment dimension found (ref_cols={})".format(all_cols[:30]))
         else:
             print("[hanmi_acl_report] segmentMethodology: SKIP - df_ref_current empty or None")
 
@@ -592,21 +641,21 @@ class Model:
                 continue
             id_res = self._find_column(df_res, "instrumentIdentifier")
             id_ref = self._find_column(df_ref, "instrumentIdentifier")
-            port_ref = self._resolve_column(df_ref, "portfolioIdentifier", "portfolioidentifier", "Portfolio Identifier", "portfolio_identifier")
-            if not id_res or not id_ref or not port_ref:
-                print("[hanmi_acl_report] quantitativeLossRates: analysisId={} SKIP - id_res={}, id_ref={}, port_ref={}".format(
-                    analysis_id, bool(id_res), bool(id_ref), bool(port_ref)))
+            seg_dim, seg_col = self._get_segment_column(df_ref)
+            if not id_res or not id_ref or not seg_col:
+                print("[hanmi_acl_report] quantitativeLossRates: analysisId={} SKIP - id_res={}, id_ref={}, segment_col={}".format(
+                    analysis_id, bool(id_res), bool(id_ref), bool(seg_col)))
                 continue
             left_on, right_on = self._join_keys_and_log(df_res, df_ref, "result", "ref", analysis_id)
             if left_on is None:
                 continue
-            ref_sub = df_ref[right_on + [port_ref]].drop_duplicates()
+            ref_sub = df_ref[right_on + [seg_col]].drop_duplicates()
             merged = df_res.merge(ref_sub, left_on=left_on, right_on=right_on, how="left")
-            print("[hanmi_acl_report] quantitativeLossRates: analysisId={} result={}, ref={}, merged={}, groups={}".format(
-                analysis_id, len(df_res), len(df_ref), len(merged), merged[port_ref].nunique() if port_ref in merged.columns else 0))
+            print("[hanmi_acl_report] quantitativeLossRates: analysisId={} dimension={} result={}, ref={}, merged={}, groups={}".format(
+                analysis_id, seg_dim or seg_col, len(df_res), len(df_ref), len(merged), merged[seg_col].nunique() if seg_col in merged.columns else 0))
             ac_col = self._find_column(merged, "amortizedCost")
             quant_col = self._find_column(merged, "onBalanceSheetReserveUnadjusted")
-            for portfolio, grp in merged.groupby(port_ref, dropna=False):
+            for portfolio, grp in merged.groupby(seg_col, dropna=False):
                 ac = self._safe_sum(grp, "amortizedCost") if ac_col else 0.0
                 quant = self._safe_sum(grp, "onBalanceSheetReserveUnadjusted") if quant_col else 0.0
                 rate = (quant / ac * 100.0) if ac else None
@@ -643,16 +692,15 @@ class Model:
         if df_current is not None and not df_current.empty and df_ref_current is not None:
             id_res = self._find_column(df_current, "instrumentIdentifier")
             id_ref = self._find_column(df_ref_current, "instrumentIdentifier")
-            port_ref = self._resolve_column(df_ref_current, "portfolioIdentifier", "portfolioidentifier", "Portfolio Identifier", "portfolio_identifier")
-            if id_res and id_ref and port_ref:
-                ref_sub = df_ref_current[[id_ref, port_ref]].drop_duplicates()
+            if id_res and id_ref and segment_col:
+                ref_sub = df_ref_current[[id_ref, segment_col]].drop_duplicates()
                 merged = df_current.merge(ref_sub, left_on=id_res, right_on=id_ref, how="left")
                 adj_col = self._find_column(merged, "onBalanceSheetReserveAdjusted")
                 unadj_col = self._find_column(merged, "onBalanceSheetReserveUnadjusted")
                 ac_col = self._find_column(merged, "amortizedCost")
-                print("[hanmi_acl_report] qualitativeReserves: merged={}, adj_col={}, unadj_col={}".format(
-                    len(merged), bool(adj_col), bool(unadj_col)))
-                for portfolio, grp in merged.groupby(port_ref, dropna=False):
+                print("[hanmi_acl_report] qualitativeReserves: dimension={} merged={}, adj_col={}, unadj_col={}".format(
+                    segment_dim_name or segment_col, len(merged), bool(adj_col), bool(unadj_col)))
+                for portfolio, grp in merged.groupby(segment_col, dropna=False):
                     qual = (grp[adj_col].sum() - grp[unadj_col].sum()) if (adj_col and unadj_col) else 0.0
                     ac = self._safe_sum(grp, "amortizedCost") if ac_col else 0.0
                     rate = (qual / ac * 100.0) if ac else None
@@ -662,8 +710,8 @@ class Model:
                         "qualitativeRatePct": round(rate, 4) if rate is not None else None,
                     })
             else:
-                print("[hanmi_acl_report] qualitativeReserves: SKIP - id_res={}, id_ref={}, port_ref={}".format(
-                    bool(id_res), bool(id_ref), bool(port_ref)))
+                print("[hanmi_acl_report] qualitativeReserves: SKIP - id_res={}, id_ref={}, segment_col={}".format(
+                    bool(id_res), bool(id_ref), bool(segment_col)))
         else:
             print("[hanmi_acl_report] qualitativeReserves: SKIP - result or ref empty")
 
@@ -710,16 +758,15 @@ class Model:
         if df_current is not None and not df_current.empty and df_ref_current is not None:
             id_res = self._find_column(df_current, "instrumentIdentifier")
             id_ref = self._find_column(df_ref_current, "instrumentIdentifier")
-            port_ref = self._resolve_column(df_ref_current, "portfolioIdentifier", "portfolioidentifier", "Portfolio Identifier", "portfolio_identifier")
             ead_col = self._find_column(df_current, "offBalanceSheetEADAmountLifetime")
             res_col = self._find_column(df_current, "offBalanceSheetReserve")
-            print("[hanmi_acl_report] unfundedBySegment: ead_col={}, res_col={}, id_res={}, port_ref={}".format(
-                bool(ead_col), bool(res_col), bool(id_res), bool(port_ref)))
+            print("[hanmi_acl_report] unfundedBySegment: ead_col={}, res_col={}, id_res={}, segment_col={}".format(
+                bool(ead_col), bool(res_col), bool(id_res), bool(segment_col)))
             left_on, right_on = self._join_keys_and_log(df_current, df_ref_current, "result", "ref", current_id)
-            if id_res and id_ref and port_ref and (ead_col or res_col) and left_on is not None:
-                ref_sub = df_ref_current[right_on + [port_ref]].drop_duplicates()
+            if id_res and id_ref and segment_col and (ead_col or res_col) and left_on is not None:
+                ref_sub = df_ref_current[right_on + [segment_col]].drop_duplicates()
                 merged = df_current.merge(ref_sub, left_on=left_on, right_on=right_on, how="left")
-                for portfolio, grp in merged.groupby(port_ref, dropna=False):
+                for portfolio, grp in merged.groupby(segment_col, dropna=False):
                     ead = self._safe_sum(grp, "offBalanceSheetEADAmountLifetime") if ead_col else 0.0
                     res = self._safe_sum(grp, "offBalanceSheetReserve") if res_col else 0.0
                     if ead or res:
@@ -796,14 +843,14 @@ class Model:
             rep_rows = len(df_rep) if df_rep is not None else 0
             print("[debug_all_data] analysisId={}: ref={}, result={}, reporting={} (all same analysis)".format(aid, ref_rows, res_rows, rep_rows))
             if df_ref is None or df_ref.empty:
-                by_analysis[str(aid)] = {"refRows": 0, "resultRows": res_rows, "reportingRows": rep_rows, "mergedRows": 0, "groupedSummary": [], "error": "ref empty"}
+                by_analysis[str(aid)] = {"refRows": 0, "resultRows": res_rows, "reportingRows": rep_rows, "mergedRows": 0, "groupedSummary": [], "refColumns": [], "segmentationCandidates": {}, "error": "ref empty"}
                 continue
             # Join keys: instrumentIdentifier (+ analysisIdentifier if in both)
             left_on, right_on = self._join_keys_and_log(
                 df_ref, df_res if (df_res is not None and not df_res.empty) else df_ref.head(0), "ref", "result", aid
             )
             if left_on is None:
-                by_analysis[str(aid)] = {"refRows": ref_rows, "resultRows": res_rows, "reportingRows": rep_rows, "mergedRows": 0, "groupedSummary": [], "error": "no join keys"}
+                by_analysis[str(aid)] = {"refRows": ref_rows, "resultRows": res_rows, "reportingRows": rep_rows, "mergedRows": 0, "groupedSummary": [], "refColumns": list(df_ref.columns), "segmentationCandidates": self._get_segmentation_candidates_for_debug(df_ref), "error": "no join keys"}
                 continue
             if not join_keys_used:
                 join_keys_used = ["instrumentIdentifier"] + (["analysisIdentifier"] if len(left_on) > 1 else [])
@@ -817,13 +864,13 @@ class Model:
                 if left_rep is not None:
                     merged = merged.merge(df_rep, left_on=left_rep, right_on=right_rep, how="left", suffixes=("", "_rep"))
                     merged_rows = len(merged)
-            # Group by key dimensions (from ref): use same resolution as report to avoid mismatch
-            port_col = self._resolve_column(merged, "portfolioIdentifier", "portfolioidentifier", "Portfolio Identifier", "portfolio_identifier")
+            # Group by key dimensions (from ref): prefer segment dimension then methodology columns (same as report)
+            seg_dim, seg_col = self._get_segment_column(df_ref)
             asc_col = self._resolve_column(merged, "ascImpairmentEvaluation", "ascimpairmentevaluation")
             lr_col = self._resolve_column(merged, "lossRateModelName", "lossratemodelname")
             pd_col = self._resolve_column(merged, "pdModelName", "pdmodelname")
             lgd_col = self._resolve_column(merged, "lgdModelName", "lgdmodelname")
-            group_cols = [c for c in [port_col, asc_col, lr_col, pd_col, lgd_col] if c is not None and c in merged.columns]
+            group_cols = [c for c in [seg_col, asc_col, lr_col, pd_col, lgd_col] if c is not None and c in merged.columns]
             if not group_cols:
                 group_cols = [c for c in merged.columns if merged[c].nunique() < 100][:3]
             agg_map = {}
@@ -846,9 +893,9 @@ class Model:
                                 r[k] = round(float(v), 2)
                         except (TypeError, ValueError):
                             pass
-                by_analysis[str(aid)] = {"refRows": ref_rows, "resultRows": res_rows, "reportingRows": rep_rows, "mergedRows": merged_rows, "groupBy": group_cols, "groupedSummary": summary[:50], "groupedSummaryTotalRows": len(summary)}
+                by_analysis[str(aid)] = {"refRows": ref_rows, "resultRows": res_rows, "reportingRows": rep_rows, "mergedRows": merged_rows, "refColumns": list(df_ref.columns), "segmentationCandidates": self._get_segmentation_candidates_for_debug(df_ref), "segmentDimensionUsed": seg_dim or (seg_col if seg_col else None), "groupBy": group_cols, "groupedSummary": summary[:50], "groupedSummaryTotalRows": len(summary)}
             except Exception as e:
-                by_analysis[str(aid)] = {"refRows": ref_rows, "resultRows": res_rows, "reportingRows": rep_rows, "mergedRows": merged_rows, "groupedSummary": [], "error": str(e)}
+                by_analysis[str(aid)] = {"refRows": ref_rows, "resultRows": res_rows, "reportingRows": rep_rows, "mergedRows": merged_rows, "refColumns": list(df_ref.columns), "segmentationCandidates": self._get_segmentation_candidates_for_debug(df_ref), "groupedSummary": [], "error": str(e)}
         out = {"joinKeysUsed": join_keys_used, "byAnalysis": by_analysis}
         debug_path = os.path.join(report_dir, "debug_all_data_summary.json")
         os.makedirs(report_dir, exist_ok=True)

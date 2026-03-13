@@ -341,6 +341,38 @@ class TestBuildHanmiAclQuarterlyReport(unittest.TestCase):
         self.assertEqual(seg_meth[0]["segment"], "Seg A")
         self.assertEqual(seg_meth[0]["methodology"], "EDF-X")
 
+    def test_segment_methodology_uses_asset_class_when_portfolio_missing(self):
+        """segmentMethodology is populated from assetClass when portfolioIdentifier is not in ref."""
+        ref = pd.DataFrame({
+            "instrumentIdentifier": ["i1", "i2"],
+            "analysisIdentifier": ["c1", "c1"],
+            "assetClass": ["Commercial", "Commercial"],
+            "ascimpairmentevaluation": ["Collectively Evaluated", "Collectively Evaluated"],
+            "pdmodelname": ["PD-1", "PD-1"],
+        })
+        res = pd.DataFrame({
+            "instrumentIdentifier": ["i1", "i2"],
+            "analysisIdentifier": ["c1", "c1"],
+            "amortizedCost": [100.0, 200.0],
+            "onBalanceSheetReserveAdjusted": [1.0, 2.0],
+            "onBalanceSheetReserveUnadjusted": [1.0, 2.0],
+        })
+        def load_mock(category, analysis_id, filter_summary=False):
+            if category == "instrumentResult" and analysis_id == "c1":
+                return res.copy()
+            if category == "instrumentReference" and analysis_id == "c1":
+                return ref.copy()
+            return None
+        self.model._load_parquet_for_analysis = load_mock
+        self.model.build_hanmi_acl_quarterly_report()
+        path = os.path.join(self.report_dir, "hanmi_acl_quarterly_report.json")
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        seg_meth = data["segmentMethodology"]
+        self.assertGreater(len(seg_meth), 0, "segmentMethodology should use assetClass when portfolioIdentifier missing")
+        self.assertEqual(seg_meth[0]["segment"], "Commercial")
+        self.assertEqual(seg_meth[0]["methodology"], "PD-1")
+
 
 class TestCreateReportExportZip(unittest.TestCase):
     """Tests for create_report_export_zip."""
