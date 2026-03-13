@@ -44,8 +44,8 @@ class ModelRunParameters :
     def _set_additional_settings(self, model_run_parameter_json, credentials) :
         settingsCallbackUrlParam = next((s for s in self.model_settings if s == 'settingsCallbackUrl'), None)
         settingsCallbackUrl = model_run_parameter_json.get('settings', {}).get('settingsCallbackUrl')
-        print(f'settingsCallbackUrlParam is {settingsCallbackUrlParam}')
-        print(f'settingsCallbackUrl is {settingsCallbackUrl}')
+        if settingsCallbackUrl:
+            print("[callback] url present, param in model_settings={}".format(settingsCallbackUrlParam is not None))
         res = False
         # Run callback when URL is present (even if wrapper omits settingsCallbackUrl from datasets.settings)
         if settingsCallbackUrl :
@@ -60,7 +60,9 @@ class ModelRunParameters :
                     for key in new_settings :
                         if key not in DEFAULT_SETTINGS :
                             self.settings[key] = new_settings[key]
-                    print(f'{self.settings}')
+                    IOSession.normalize_analyses_to_settings(self.settings)
+                    n_ids = len(self.settings.get('analysisIds') or [])
+                    print("[callback] merged settings, analysisIds count={}".format(n_ids))
                     res = True
                 except JSONDecodeError as e :
                     log.error(f'Cannot deserialize: {response.text}')
@@ -88,7 +90,7 @@ class IOSession :
         self.cap_session = cap_session
 
         self.local_temp_directory = tempfile.mkdtemp().replace('\\', '/')
-        print("[IOSession] local_temp_directory={}".format(self.local_temp_directory))
+        print("[IOSession] temp_dir={}".format(self.local_temp_directory))
         self.logger.debug(f'Created local temp directory: {self.local_temp_directory}')
         self.model_run_parameters = self.getModelRunParameters(s3_json_key, credentials)
         self.local_directories = self.create_io_directories()
@@ -139,11 +141,10 @@ class IOSession :
             path = self.initializeDirectory(f'{self.local_temp_directory}/outputPaths/{file}')
             local_directories['outputPaths'].update({file : path})
 
-        print("[create_io_directories] callBack={}, inputPath payload files={}".format(
+        print("[create_io_directories] callBack={}, payload_files={}".format(
             self.model_run_parameters.callBack, len(cont)))
         if self.model_run_parameters.callBack is True :
             analysis_ids = self.model_run_parameters.settings.get('analysisIds', []) or []
-            print("[create_io_directories] callback: analysisIds count={}".format(len(analysis_ids)))
             local_directories['inputPaths'] = {}
             for file1, inputs in self.model_run_parameters.settings['inputPaths'].items() :
                 analysis_path = []
@@ -499,6 +500,54 @@ class IOSession :
 
     ANALYSIS_METADATA_FILENAME = "analysis_metadata.json"
 
+    @staticmethod
+    def normalize_analyses_to_settings(settings):
+        """
+        Single structure: if settings has 'analyses' (array of { analysisId, quarterLabel?, tags? }).
+        Order = chronological (oldest first). Optional tags (e.g. "current", "prior", "priorYear") let
+        this report and others pick which analyses to use; we derive analysisIds, analysisRoles, quarterLabels.
+        Backward compat: if "role" is present instead of "tags", treat it as a single-element tag.
+        """
+        analyses = settings.get("analyses")
+        if not isinstance(analyses, list) or len(analyses) == 0:
+            return
+        analysis_ids = []
+        current_id = prior_id = prior_year_id = None
+        quarter_labels = {}
+        for a in analyses:
+            if isinstance(a, dict) and "analysisId" in a:
+                aid = str(a["analysisId"])
+                analysis_ids.append(aid)
+                tags = a.get("tags")
+                if not isinstance(tags, list) and a.get("role") is not None:
+                    tags = [str(a.get("role")).strip()] if a.get("role") else []
+                if isinstance(tags, list):
+                    tags = [str(t).strip() for t in tags if t]
+                    if "current" in tags:
+                        current_id = aid
+                    if "prior" in tags:
+                        prior_id = aid
+                    if "priorYear" in tags:
+                        prior_year_id = aid
+                if a.get("quarterLabel"):
+                    quarter_labels[aid] = str(a["quarterLabel"]).strip()
+            elif isinstance(a, dict) and "analysisId" not in a:
+                continue
+            else:
+                aid = str(a)
+                analysis_ids.append(aid)
+        if not analysis_ids:
+            return
+        settings["analysisIds"] = analysis_ids
+        settings["analysisRoles"] = {
+            "current": current_id,
+            "prior": prior_id,
+            "priorYear": prior_year_id,
+            "quarters": analysis_ids,
+        }
+        if quarter_labels:
+            settings["quarterLabels"] = quarter_labels
+
     def _load_analysis_metadata_from_input(self):
         """
         If settings.analysisRoles is not already set, look for analysis_metadata.json under
@@ -526,11 +575,34 @@ class IOSession :
         except (OSError, JSONDecodeError) as e:
             self.logger.warning("Failed to load %s: %s", found, e)
             return
-        # Expected keys: current, prior, priorYear (optional), quarters (optional list)
+        # One structure: "analyses" array -> normalize to analysisIds, analysisRoles, quarterLabels.
+        # Legacy: "current", "prior", "priorYear", "quarters" -> set analysisRoles (and quarterLabels if quarters are objects).
         if not isinstance(data, dict):
             return
-        self.model_run_parameters.settings["analysisRoles"] = data
-        self.logger.info("Loaded analysis roles from %s: current=%s, prior=%s", found, data.get("current"), data.get("prior"))
+        if "analyses" in data and isinstance(data["analyses"], list):
+            self.model_run_parameters.settings["analyses"] = data["analyses"]
+            IOSession.normalize_analyses_to_settings(self.model_run_parameters.settings)
+            self.logger.info("Loaded analyses from %s: %s analyses -> analysisIds, analysisRoles", found, len(data["analyses"]))
+            print("[getSourceInputFiles] Loaded analysis metadata from {} (analyses -> analysisIds, roles)".format(os.path.basename(found)))
+            return
+        roles = dict(data)
+        quarters_raw = roles.get("quarters")
+        quarter_labels = {}
+        if isinstance(quarters_raw, list):
+            quarter_ids = []
+            for item in quarters_raw:
+                if isinstance(item, dict) and "analysisId" in item:
+                    aid = str(item["analysisId"])
+                    quarter_ids.append(aid)
+                    if item.get("quarterLabel"):
+                        quarter_labels[aid] = str(item["quarterLabel"])
+                else:
+                    quarter_ids.append(str(item))
+            roles["quarters"] = quarter_ids
+            if quarter_labels:
+                self.model_run_parameters.settings["quarterLabels"] = quarter_labels
+        self.model_run_parameters.settings["analysisRoles"] = roles
+        self.logger.info("Loaded analysis roles from %s: current=%s, prior=%s", found, roles.get("current"), roles.get("prior"))
         print("[getSourceInputFiles] Loaded analysis metadata from {}".format(os.path.basename(found)))
 
     def _get_macro_scenario_date_from_analysis_details(self, report_dir, analysis_id):
@@ -586,25 +658,11 @@ class IOSession :
             source_input_directory = self.local_directories.get('inputPaths')
             input_files = {}
             analysis_ids = self.model_run_parameters.settings.get('analysisIds', [])
-            print("[getSourceInputFiles] analysisIds={} (count={})".format(analysis_ids, len(analysis_ids or [])))
+            n_analyses = len(analysis_ids or [])
+            print("[getSourceInputFiles] analysisIds count={}".format(n_analyses))
 
-            # Only output/: for each analysis ID, list and show files under .../scenarioidentifier=Summary/
             base = self.OUTPUT_ROOT_BASE
             scenario = self.SCENARIO_SUMMARY_SEGMENT
-            print("[getSourceInputFiles] Using path: output/instrumentResult/analysisidentifier={{id}}/{}/".format(scenario))
-            for aid in (analysis_ids or []):
-                prefix = "{}/instrumentResult/analysisidentifier={}/{}/".format(base, aid, scenario)
-                print("\n[getSourceInputFiles] analysisidentifier={}: listing files under {}".format(aid, prefix))
-                self._list_s3_at_prefix(prefix, "output/.../analysisidentifier={}/{}/".format(aid, scenario))
-                # List and print object keys (files) found under this prefix
-                object_keys = self._get_s3_object_keys(prefix)
-                parquet_count = len([k for k in object_keys if k.endswith(".parquet")])
-                if object_keys:
-                    print("[getSourceInputFiles] instrumentResult analysisId={}: {} object(s), {} parquet".format(aid, len(object_keys), parquet_count))
-                else:
-                    print("[getSourceInputFiles] No files under this path.")
-
-            # Download parquet files from output/.../scenarioidentifier=Summary/ (all keys under prefix) into instrumentResult dir per analysis
             instrument_result_paths = source_input_directory.get("instrumentResult") or []
             for idx, aid in enumerate(analysis_ids or []):
                 if idx >= len(instrument_result_paths):
@@ -614,7 +672,6 @@ class IOSession :
                 prefix = "{}/instrumentResult/analysisidentifier={}/{}/".format(base, aid, scenario)
                 keys = self._get_s3_object_keys(prefix)
                 parquet_keys = [k for k in keys if k.endswith(".parquet")]
-                print("[getSourceInputFiles] instrumentResult analysisidentifier={}: downloading {} parquet file(s)".format(aid, len(parquet_keys)))
                 for s3_key in parquet_keys:
                     local_path = os.path.join(local_dir, os.path.basename(s3_key))
                     if self.local_mode:
@@ -633,7 +690,6 @@ class IOSession :
                 prefix = "{}/instrumentReporting/analysisidentifier={}/".format(base, aid)
                 keys = self._get_s3_object_keys(prefix)
                 parquet_keys = [k for k in keys if k.endswith(".parquet")]
-                print("[getSourceInputFiles] instrumentReporting analysisidentifier={}: downloading {} parquet file(s)".format(aid, len(parquet_keys)))
                 for s3_key in parquet_keys:
                     local_path = os.path.join(local_dir, os.path.basename(s3_key))
                     if self.local_mode:
@@ -651,7 +707,6 @@ class IOSession :
                 prefix = "{}/instrumentReference/analysisidentifier={}/".format(base, aid)
                 keys = self._get_s3_object_keys(prefix)
                 parquet_keys = [k for k in keys if k.endswith(".parquet")]
-                print("[getSourceInputFiles] instrumentReference analysisidentifier={}: downloading {} parquet file(s) (all portfolios)".format(aid, len(parquet_keys)))
                 for s3_key in parquet_keys:
                     # Preserve subpath under analysisidentifier={id}/ to avoid overwriting (e.g. portfolioidentifier=CRE/part-*.parquet)
                     rel = s3_key[len(prefix):] if s3_key.startswith(prefix) else os.path.basename(s3_key)
@@ -662,14 +717,12 @@ class IOSession :
                     else:
                         self._downloadFile(s3_key, local_path)
 
-            # Download analysisDetails.json for each analysis from export/analysisidentifier={id}/analysisDetails.json into report output
             report_dir = self.local_directories.get("outputPaths", {}).get("report")
             if report_dir:
                 os.makedirs(report_dir, exist_ok=True)
                 for aid in (analysis_ids or []):
                     s3_key = "{}/analysisidentifier={}/analysisDetails.json".format(self.EXPORT_BASE, aid)
                     local_path = os.path.join(report_dir, "analysisDetails_{}.json".format(aid))
-                    print("[getSourceInputFiles] Downloading analysisDetails for analysisidentifier={} <- {}".format(aid, s3_key))
                     if self.local_mode:
                         self._safeCopyFile(s3_key, local_path)
                     else:
@@ -681,11 +734,8 @@ class IOSession :
             if main_analysis_id is None and analysis_ids:
                 main_analysis_id = analysis_ids[0]
             scenario_asof_date = self._get_macro_scenario_date_from_analysis_details(report_dir, main_analysis_id)
-            if scenario_asof_date:
-                print("[getSourceInputFiles] macroEconomicVariableInput: using asofdate={} from analysisDetails (main analysisId={})".format(
-                    scenario_asof_date, main_analysis_id))
-            else:
-                print("[getSourceInputFiles] macroEconomicVariableInput: no asOfDate from analysisDetails (BASE scenario or reportingDate); will try default path")
+            if not scenario_asof_date:
+                print("[getSourceInputFiles] macro: no asOfDate from analysisDetails (will try default path)")
             for idx, aid in enumerate(analysis_ids or []):
                 if idx >= len(macro_paths):
                     break
@@ -709,14 +759,12 @@ class IOSession :
                         keys = self._get_s3_object_keys(prefix)
                         parquet_keys = [k for k in keys if k.endswith(".parquet")]
                         if parquet_keys:
-                            print("[getSourceInputFiles] macroEconomicVariableInput asofdate={} scenario=BASE: downloading {} parquet file(s) -> analysisId={}".format(
-                                try_date or "n/a", len(parquet_keys), aid))
                             for s3_key in parquet_keys:
                                 local_path = os.path.join(local_dir, os.path.basename(s3_key))
                                 self._downloadFile(s3_key, local_path)
                             break
                     if not parquet_keys:
-                        print("[getSourceInputFiles] macroEconomicVariableInput: no parquet at input/.../asofdate=.../scenarioidentifier=BASE/ (check analysisDetails.scenarios BASE.asOfDate)")
+                        print("[getSourceInputFiles] macro: no parquet at input/.../asofdate=.../scenarioidentifier=BASE/")
                 else:
                     # Local mode: copy from test folder if present (same prefix structure under test input path)
                     pass
@@ -736,7 +784,7 @@ class IOSession :
                         file = self._downloadFile(rem_file_path, loc_file_path)
 
             self._load_analysis_metadata_from_input()
-            print("[getSourceInputFiles] callback branch done: optional payload and metadata loaded if present")
+            print("[getSourceInputFiles] done: result, reporting, ref, analysisDetails (and macro if present) for {} analyses".format(n_analyses))
 
         else :
             print("[getSourceInputFiles] non-callback branch: using inputPath.custInputs")

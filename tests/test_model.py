@@ -119,14 +119,14 @@ class TestModelHelpers(unittest.TestCase):
         self.assertTrue(out["scenarioIdentifier"].str.lower().eq("summary").all())
 
     def test_get_analysis_roles_default(self):
-        """Without analysisRoles, current=first analysisId, prior=second, priorYear=None, quarters=[]."""
+        """Without analysisRoles, current=first analysisId, prior=second, priorYear=None, quarters=all analysisIds."""
         self.model.io_session.model_run_parameters.settings["analysisIds"] = [100, 200]
         self.model.io_session.model_run_parameters.settings.pop("analysisRoles", None)
         cur, pri, py, quarters = self.model._get_analysis_roles()
         self.assertEqual(cur, 100)
         self.assertEqual(pri, 200)
         self.assertIsNone(py)
-        self.assertEqual(quarters, [])
+        self.assertEqual(quarters, ["100", "200"])
 
     def test_get_analysis_roles_from_metadata(self):
         """With analysisRoles, use current/prior/priorYear/quarters from it."""
@@ -152,6 +152,35 @@ class TestModelHelpers(unittest.TestCase):
         self.assertEqual(pri, 2)
         self.assertIsNone(py)
         self.assertEqual(quarters, [1, 2, 3])
+
+    def test_normalize_analyses_to_settings_single_structure(self):
+        """One 'analyses' structure with tags normalizes to analysisIds, analysisRoles, quarterLabels."""
+        settings = {
+            "analyses": [
+                {"analysisId": "id1", "quarterLabel": "Q3 2025", "tags": ["prior"]},
+                {"analysisId": "id2", "quarterLabel": "Q4 2025", "tags": ["current"]},
+            ]
+        }
+        model_module.iosession.IOSession.normalize_analyses_to_settings(settings)
+        self.assertEqual(settings["analysisIds"], ["id1", "id2"])
+        self.assertEqual(settings["analysisRoles"]["current"], "id2")
+        self.assertEqual(settings["analysisRoles"]["prior"], "id1")
+        self.assertEqual(settings["analysisRoles"]["quarters"], ["id1", "id2"])
+        self.assertEqual(settings["quarterLabels"]["id1"], "Q3 2025")
+        self.assertEqual(settings["quarterLabels"]["id2"], "Q4 2025")
+
+    def test_normalize_analyses_to_settings_role_backward_compat(self):
+        """Legacy 'role' (single string) is treated like tags for backward compatibility."""
+        settings = {
+            "analyses": [
+                {"analysisId": "id1", "role": "prior", "quarterLabel": "Q3 2025"},
+                {"analysisId": "id2", "role": "current", "quarterLabel": "Q4 2025"},
+            ]
+        }
+        model_module.iosession.IOSession.normalize_analyses_to_settings(settings)
+        self.assertEqual(settings["analysisIds"], ["id1", "id2"])
+        self.assertEqual(settings["analysisRoles"]["current"], "id2")
+        self.assertEqual(settings["analysisRoles"]["prior"], "id1")
 
 
 class TestBuildQuarterlySummaryReport(unittest.TestCase):
@@ -254,6 +283,13 @@ class TestBuildHanmiAclQuarterlyReport(unittest.TestCase):
         self.assertIn("unfundedTrend", data)
         self.assertEqual(data["reportMetadata"]["currentAnalysisId"], "c1")
         self.assertEqual(data["reportMetadata"]["priorAnalysisId"], "p1")
+        # Multi-quarter: quantitative and unfunded trend rows include quarterLabel (from fallback [prior, current])
+        main_q = data.get("quantitativeLossRatesBySegment", {}).get("main", [])
+        if main_q:
+            self.assertIn("quarterLabel", main_q[0], "quantitative main rows should have quarterLabel for multi-quarter")
+        trend = data.get("unfundedTrend", [])
+        if trend:
+            self.assertIn("quarterLabel", trend[0], "unfundedTrend rows should have quarterLabel")
 
     def test_collectively_by_methodology_with_mock_data(self):
         """With mock result + ref (collective, methodology), section is populated."""

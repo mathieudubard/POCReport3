@@ -1,0 +1,6 @@
+{
+  "analyses": [
+    { "analysisId": "4647909", "quarterLabel": "Q3 2025", "tags": ["prior"] },
+    { "analysisId": "4647997", "quarterLabel": "Q4 2025", "tags": ["current"] }
+  ]
+}

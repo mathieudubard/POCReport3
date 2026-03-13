@@ -85,7 +85,10 @@ class Model:
 
         print("[Model run] Step 6: Create file dicts and upload outputs to S3")
         all_files = self.io_session.createOutputFileDicts(new_mrp)
-        print("[Model run] Uploading {} output file(s): {}".format(len(all_files), list(all_files.keys())))
+        keys_preview = list(all_files.keys())[:15]
+        if len(all_files) > 15:
+            keys_preview.append("...")
+        print("[Model run] Uploading {} file(s): {}".format(len(all_files), keys_preview))
         if all_files:
             self.io_session.uploadFiles(all_files)
         print("[Model run] END")
@@ -241,13 +244,9 @@ class Model:
             left_on.append(an_left)
             right_on.append(an_right)
         if not left_on:
-            print("[join] {} vs {}: no join keys (instrumentIdentifier left={}, right={})".format(
+            print("[join] {} vs {}: no join keys (instrumentIdentifier L={} R={})".format(
                 left_name, right_name, bool(id_left), bool(id_right)))
             return None, None
-        print("[join] {} (rows={}) vs {} (rows={}) for same analysisId={}: join on {} -> left_on={}, right_on={}".format(
-            left_name, len(left_df), right_name, len(right_df), analysis_id,
-            ["instrumentIdentifier"] + (["analysisIdentifier"] if an_left and an_right else []),
-            left_on, right_on))
         return left_on, right_on
 
     def _filter_summary_scenario(self, df):
@@ -259,20 +258,102 @@ class Model:
             return df
         return df[df[col].astype(str).str.strip().str.lower() == "summary"].copy()
 
+    def _date_to_quarter(self, dt):
+        """Return (year, quarter) for a datetime; quarter in 1..4."""
+        if dt is None:
+            return None
+        try:
+            q = (pd.Timestamp(dt).month - 1) // 3 + 1
+            return (int(pd.Timestamp(dt).year), q)
+        except Exception:
+            return None
+
+    def _infer_analysis_roles_from_dates(self, report_dir, analysis_ids):
+        """
+        Infer current/prior/priorYear from analysisDetails reportingDate for each analysisId.
+        Latest date = current (if multiple share latest, first in list wins). Calendar quarter
+        before current = prior. Same quarter prior year = priorYear. Returns (current_id, prior_id, prior_year_id).
+        """
+        if not report_dir or not analysis_ids:
+            return None, None, None
+        dated = []
+        for aid in analysis_ids:
+            dt = self._get_reporting_date_from_analysis_details(report_dir, aid)
+            dated.append((str(aid), dt))
+        dated = [(aid, dt) for aid, dt in dated if dt is not None]
+        if not dated:
+            return None, None, None
+        # Sort by date descending; for ties use original list order (first in list wins)
+        order = {str(aid): i for i, aid in enumerate(analysis_ids)}
+        dated.sort(key=lambda x: (-pd.Timestamp(x[1]).toordinal(), order.get(x[0], 999)))
+        current_id = dated[0][0]
+        current_dt = dated[0][1]
+        yq_current = self._date_to_quarter(current_dt)
+        if not yq_current:
+            return current_id, None, None
+        y_c, q_c = yq_current
+        prior_yq = (y_c, q_c - 1) if q_c > 1 else (y_c - 1, 4)
+        prior_year_yq = (y_c - 1, q_c)
+        prior_id = prior_year_id = None
+        for aid, dt in dated[1:]:
+            yq = self._date_to_quarter(dt)
+            if not yq:
+                continue
+            if yq == prior_yq and prior_id is None:
+                prior_id = aid
+            if yq == prior_year_yq and prior_year_id is None:
+                prior_year_id = aid
+            if prior_id and prior_year_id:
+                break
+        print("[hanmi_acl_report] inferred from dates: current={}, prior={}, priorYear={}".format(current_id, prior_id, prior_year_id))
+        return current_id, prior_id, prior_year_id
+
     def _get_analysis_roles(self):
         """
         Return (current_id, prior_id, prior_year_id, quarters_list) from settings.analysisRoles
         if present, else from analysisIds: current=first, prior=second, prior_year=None, quarters=[].
-        quarters is the ordered list of analysis IDs to use for multi-quarter tables (e.g. Q4 '24, Q3 '25, Q4 '25).
+        quarters is the ordered list of analysis IDs for multi-quarter tables.
         """
         io = self.io_session
         analysis_ids = io.model_run_parameters.settings.get("analysisIds", []) or []
         roles = io.model_run_parameters.settings.get("analysisRoles") or {}
-        current_id = roles["current"] if "current" in roles else (analysis_ids[0] if analysis_ids else None)
-        prior_id = roles["prior"] if "prior" in roles else (analysis_ids[1] if len(analysis_ids) >= 2 else None)
+        current_id = roles.get("current")
+        prior_id = roles.get("prior")
         prior_year_id = roles.get("priorYear")
         quarters = roles["quarters"] if "quarters" in roles and isinstance(roles["quarters"], list) else []
+        if not quarters and analysis_ids:
+            quarters = [str(aid) for aid in analysis_ids]
+        if (current_id is None or prior_id is None) and analysis_ids:
+            current_id = current_id or (analysis_ids[0] if analysis_ids else None)
+            prior_id = prior_id or (analysis_ids[1] if len(analysis_ids) >= 2 else None)
         return current_id, prior_id, prior_year_id, quarters
+
+    def _get_quarter_label(self, report_dir, analysis_id):
+        """Return display label for a quarter (e.g. 'Q4 2025'). Uses settings.quarterLabels if set, else reportingDate from analysisDetails."""
+        labels = self.io_session.model_run_parameters.settings.get("quarterLabels") or {}
+        aid_str = str(analysis_id)
+        if aid_str in labels:
+            return labels[aid_str]
+        dt = self._get_reporting_date_from_analysis_details(report_dir, analysis_id)
+        if dt is not None:
+            return "Q{} {}".format((dt.month - 1) // 3 + 1, dt.year)
+        return str(analysis_id)
+
+    def _get_quarters_for_tables(self, report_dir, current_id, prior_id, quarters_list):
+        """
+        Return ordered list of (analysis_id, quarter_label) for multi-quarter tables.
+        Uses quarters_list if non-empty; else [prior_id, current_id] when both exist, else [current_id].
+        Each ID must be in settings.analysisIds so data can be loaded.
+        """
+        if quarters_list:
+            ids = [str(aid) for aid in quarters_list]
+        elif prior_id and current_id:
+            ids = [str(prior_id), str(current_id)]
+        elif current_id:
+            ids = [str(current_id)]
+        else:
+            return []
+        return [(aid, self._get_quarter_label(report_dir, aid)) for aid in ids]
 
     def _load_parquet_for_analysis(self, category, analysis_id, filter_summary=False):
         """Load all parquet under that category dir for one analysis_id. If filter_summary, filter to scenarioIdentifier=Summary."""
@@ -290,7 +371,7 @@ class Model:
         load_dir = input_paths[idx]
         files = glob.glob(os.path.join(load_dir, "**", "*.parquet"), recursive=True)
         if not files:
-            print("[_load_parquet] no parquet files in {} (category={}, analysisId={})".format(load_dir, category, analysis_id))
+            print("[_load_parquet] no parquet in {} (category={}, analysisId={})".format(load_dir, category, analysis_id))
             return None
         dfs = []
         for f in files:
@@ -303,8 +384,6 @@ class Model:
         out = pd.concat(dfs, ignore_index=True)
         if filter_summary:
             out = self._filter_summary_scenario(out)
-        print("[_load_parquet] {} analysisId={}: {} files -> {} rows".format(
-            category, analysis_id, len(files), len(out)))
         return out
 
     def _get_reporting_date_from_analysis_details(self, report_dir, analysis_id):
@@ -382,15 +461,13 @@ class Model:
             self.logger.warning("No analysisIds; skipping quarterly summary report.")
             return
         current_id, prior_id, prior_year_id, quarters_list = self._get_analysis_roles()
-        print("[quarterly_summary] current analysisId={}, prior analysisId={}, priorYear={}, quarters count={}".format(
-            current_id, prior_id, prior_year_id, len(quarters_list)))
-
         df_current = self._load_parquet_for_analysis("instrumentResult", current_id, filter_summary=True)
         df_prior = self._load_parquet_for_analysis("instrumentResult", prior_id, filter_summary=True) if prior_id else None
         df_reporting_current = self._load_parquet_for_analysis("instrumentReporting", current_id)
         df_ref_current = self._load_parquet_for_analysis("instrumentReference", current_id)
         df_ref_prior = self._load_parquet_for_analysis("instrumentReference", prior_id) if prior_id else None
-        print("[quarterly_summary] data loaded: result current={}, prior={}, reporting={}, ref current={}, prior={}".format(
+        print("[quarterly_summary] roles current={}, prior={}, priorYear={}; data result({},{}) reporting ref({},{})".format(
+            current_id, prior_id, prior_year_id,
             len(df_current) if df_current is not None else 0, len(df_prior) if df_prior is not None else 0,
             len(df_reporting_current) if df_reporting_current is not None else 0,
             len(df_ref_current) if df_ref_current is not None else 0, len(df_ref_prior) if df_ref_prior is not None else 0))
@@ -522,6 +599,19 @@ class Model:
         if not analysis_ids:
             self.logger.warning("No analysisIds; skipping Hanmi ACL report.")
             return
+        # Infer current/prior/priorYear from analysisDetails dates if not set (no tags required in config)
+        roles = io.model_run_parameters.settings.get("analysisRoles") or {}
+        if roles.get("quarters") is None:
+            roles["quarters"] = [str(aid) for aid in analysis_ids]
+        if roles.get("current") is None or roles.get("prior") is None or roles.get("priorYear") is None:
+            inf_current, inf_prior, inf_prior_year = self._infer_analysis_roles_from_dates(report_dir, analysis_ids)
+            if inf_current and roles.get("current") is None:
+                roles["current"] = inf_current
+            if inf_prior and roles.get("prior") is None:
+                roles["prior"] = inf_prior
+            if inf_prior_year and roles.get("priorYear") is None:
+                roles["priorYear"] = inf_prior_year
+            io.model_run_parameters.settings["analysisRoles"] = roles
         current_id, prior_id, prior_year_id, quarters_list = self._get_analysis_roles()
         print("[hanmi_acl_report] roles: current={}, prior={}, priorYear={}, quarters={}".format(
             current_id, prior_id, prior_year_id, quarters_list))
@@ -534,27 +624,12 @@ class Model:
         df_macro = self._load_parquet_for_analysis("macroEconomicVariableInput", current_id) if current_id else None
         if df_macro is not None and not df_macro.empty:
             df_macro = self._filter_macro_for_report(df_macro, report_dir, current_id)
-        print("[hanmi_acl_report] data loaded: result current={}, prior={}, reporting={}, ref={}, macro={}".format(
+        print("[hanmi_acl_report] data loaded: result(current={}, prior={}), reporting={}, ref={}, macro={}".format(
             len(df_current) if df_current is not None else 0, len(df_prior) if df_prior is not None else 0,
             len(df_reporting_current) if df_reporting_current is not None else 0,
             len(df_ref_current) if df_ref_current is not None else 0, len(df_macro) if df_macro is not None else 0))
-        # Debug: key columns and sample values to explain empty sections
         if df_current is None or df_current.empty:
-            print("[hanmi_acl_report] result current: EMPTY or None -> segment/collective/quant/qual/individual/unfunded will be empty")
-        else:
-            id_c = self._find_column(df_current, "instrumentIdentifier")
-            print("[hanmi_acl_report] result current: rows={}, cols={}, instrumentId={}".format(
-                len(df_current), list(df_current.columns)[:15], "ok" if id_c else "MISSING"))
-        if df_ref_current is not None and not df_ref_current.empty:
-            port_c = self._resolve_column(df_ref_current, "portfolioIdentifier", "portfolioidentifier", "Portfolio Identifier", "portfolio_identifier")
-            asc_c = self._resolve_column(df_ref_current, "ascImpairmentEvaluation", "ascimpairmentevaluation")
-            lr_c = self._resolve_column(df_ref_current, "lossRateModelName", "lossratemodelname")
-            pd_c = self._resolve_column(df_ref_current, "pdModelName", "pdmodelname")
-            model_c = lr_c or pd_c
-            uniq_asc = df_ref_current[asc_c].dropna().astype(str).unique().tolist()[:5] if asc_c else []
-            uniq_port = df_ref_current[port_c].dropna().astype(str).unique().tolist()[:5] if port_c else []
-            print("[hanmi_acl_report] ref current: portfolioIdentifier={}, ascImpairmentEvaluation={}, modelCol={}, sample asc={}, sample port={}".format(
-                "ok" if port_c else "MISSING", "ok" if asc_c else "MISSING", "ok" if model_c else "MISSING", uniq_asc, uniq_port))
+            print("[hanmi_acl_report] result current EMPTY -> segment/collective/quant/qual/individual/unfunded will be empty")
 
         report_metadata = {
             "reportTitle": "Allowance for Credit Losses – Quarterly Analysis and Supplemental Exhibits",
@@ -599,8 +674,6 @@ class Model:
                 # Per-row methodology: first non-null of lossRate, PD, LGD so report avoids nulls
                 collective = collective.copy()
                 collective["_methodology"] = collective.apply(lambda r: self._methodology_from_row(r, lr_col, pd_col, lgd_col), axis=1)
-                print("[hanmi_acl_report] collectivelyByMethodology: result={}, ref={}, merged={}, after collective filter={}, model_cols(lr,pd,lgd)={}".format(
-                    len(df_current), len(df_ref_current), len(merged), len(collective), bool(lr_col or pd_col or lgd_col)))
                 if not collective.empty:
                     adj_col = self._find_column(collective, "onBalanceSheetReserveAdjusted")
                     unadj_col = self._find_column(collective, "onBalanceSheetReserveUnadjusted")
@@ -630,7 +703,8 @@ class Model:
                 len(df_current) if df_current is not None else 0, len(df_ref_current) if df_ref_current is not None else 0))
 
         quantitative_by_segment = {"main": [], "creSubSegments": []}
-        for analysis_id, label in [(current_id, "current"), (prior_id, "prior")]:
+        quarters_for_tables = self._get_quarters_for_tables(report_dir, current_id, prior_id, quarters_list)
+        for analysis_id, quarter_label in quarters_for_tables:
             if not analysis_id:
                 continue
             df_res = self._load_parquet_for_analysis("instrumentResult", analysis_id, filter_summary=True)
@@ -651,8 +725,6 @@ class Model:
                 continue
             ref_sub = df_ref[right_on + [seg_col]].drop_duplicates()
             merged = df_res.merge(ref_sub, left_on=left_on, right_on=right_on, how="left")
-            print("[hanmi_acl_report] quantitativeLossRates: analysisId={} dimension={} result={}, ref={}, merged={}, groups={}".format(
-                analysis_id, seg_dim or seg_col, len(df_res), len(df_ref), len(merged), merged[seg_col].nunique() if seg_col in merged.columns else 0))
             ac_col = self._find_column(merged, "amortizedCost")
             quant_col = self._find_column(merged, "onBalanceSheetReserveUnadjusted")
             for portfolio, grp in merged.groupby(seg_col, dropna=False):
@@ -662,31 +734,37 @@ class Model:
                 quantitative_by_segment["main"].append({
                     "segment": str(portfolio) if portfolio is not None else "",
                     "analysisId": analysis_id,
-                    "label": label,
+                    "quarterLabel": quarter_label,
                     "amortizedCost": round(ac, 2),
                     "quantitativeReserve": round(quant, 2),
                     "lossRatePct": round(rate, 4) if rate is not None else None,
                 })
 
         net_chargeoffs_quarterly = []
-        if df_reporting_current is not None and not df_reporting_current.empty:
-            net_col = self._find_column(df_reporting_current, "netChargeOffAmount")
-            gco_col = self._find_column(df_reporting_current, "grossChargeOffAmount")
-            rec_col = self._find_column(df_reporting_current, "recoveryAmount")
-            port_col = self._resolve_column(df_reporting_current, "portfolioIdentifier", "portfolioidentifier", "Portfolio Identifier", "portfolio_identifier")
+        for aid, qlabel in quarters_for_tables:
+            if not aid:
+                continue
+            df_rep = self._load_parquet_for_analysis("instrumentReporting", aid)
+            if df_rep is None or df_rep.empty:
+                continue
+            net_col = self._find_column(df_rep, "netChargeOffAmount")
+            gco_col = self._find_column(df_rep, "grossChargeOffAmount")
+            rec_col = self._find_column(df_rep, "recoveryAmount")
+            port_col = self._resolve_column(df_rep, "portfolioIdentifier", "portfolioidentifier", "Portfolio Identifier", "portfolio_identifier")
             if port_col:
-                for portfolio, grp in df_reporting_current.groupby(port_col, dropna=False):
+                for portfolio, grp in df_rep.groupby(port_col, dropna=False):
                     net = grp[net_col].sum() if net_col else ((grp[gco_col].sum() - grp[rec_col].sum()) if (gco_col and rec_col) else 0.0)
                     net_chargeoffs_quarterly.append({
                         "segment": str(portfolio) if portfolio is not None else "",
-                        "analysisId": current_id,
+                        "analysisId": aid,
+                        "quarterLabel": qlabel,
                         "netChargeOffs": round(float(net), 2),
                     })
             else:
-                net = self._safe_sum(df_reporting_current, "netChargeOffAmount") or (
-                    self._safe_sum(df_reporting_current, "grossChargeOffAmount") - self._safe_sum(df_reporting_current, "recoveryAmount")
+                net = self._safe_sum(df_rep, "netChargeOffAmount") or (
+                    self._safe_sum(df_rep, "grossChargeOffAmount") - self._safe_sum(df_rep, "recoveryAmount")
                 )
-                net_chargeoffs_quarterly.append({"segment": "Total", "analysisId": current_id, "netChargeOffs": round(float(net), 2)})
+                net_chargeoffs_quarterly.append({"segment": "Total", "analysisId": aid, "quarterLabel": qlabel, "netChargeOffs": round(float(net), 2)})
 
         qualitative_by_segment = {"main": []}
         if df_current is not None and not df_current.empty and df_ref_current is not None:
@@ -698,8 +776,6 @@ class Model:
                 adj_col = self._find_column(merged, "onBalanceSheetReserveAdjusted")
                 unadj_col = self._find_column(merged, "onBalanceSheetReserveUnadjusted")
                 ac_col = self._find_column(merged, "amortizedCost")
-                print("[hanmi_acl_report] qualitativeReserves: dimension={} merged={}, adj_col={}, unadj_col={}".format(
-                    segment_dim_name or segment_col, len(merged), bool(adj_col), bool(unadj_col)))
                 for portfolio, grp in merged.groupby(segment_col, dropna=False):
                     qual = (grp[adj_col].sum() - grp[unadj_col].sum()) if (adj_col and unadj_col) else 0.0
                     ac = self._safe_sum(grp, "amortizedCost") if ac_col else 0.0
@@ -738,7 +814,6 @@ class Model:
                 ref_sub = df_ref_current[right_on + [asc_col]].drop_duplicates()
                 merged = df_current.merge(ref_sub, left_on=left_on, right_on=right_on, how="left")
                 individual = merged[merged[asc_col].astype(str).str.strip().str.lower().str.contains("individual", na=False)]
-                print("[hanmi_acl_report] individualAnalysis: merged={}, after individual filter={}".format(len(merged), len(individual)))
                 if not individual.empty:
                     ac = self._safe_sum(individual, "amortizedCost")
                     res = self._safe_sum(individual, "onBalanceSheetReserveAdjusted") or self._safe_sum(individual, "onBalanceSheetReserve")
@@ -781,7 +856,7 @@ class Model:
             print("[hanmi_acl_report] unfundedBySegment: SKIP - result or ref empty")
 
         unfunded_trend = []
-        for aid in [prior_id, current_id]:
+        for aid, qlabel in quarters_for_tables:
             if not aid:
                 continue
             df_res = self._load_parquet_for_analysis("instrumentResult", aid, filter_summary=True)
@@ -792,9 +867,7 @@ class Model:
             ead_col = self._find_column(df_res, "offBalanceSheetEADAmountLifetime")
             obr = self._safe_sum(df_res, "offBalanceSheetReserve")
             ead = self._safe_sum(df_res, "offBalanceSheetEADAmountLifetime")
-            print("[hanmi_acl_report] unfundedTrend: analysisId={} result rows={}, obr_col={}, ead_col={}, obr={}, ead={}".format(
-                aid, len(df_res), bool(obr_col), bool(ead_col), obr, ead))
-            unfunded_trend.append({"analysisId": aid, "requiredReserve": round(obr, 2), "totalUnfunded": round(ead, 2)})
+            unfunded_trend.append({"analysisId": aid, "quarterLabel": qlabel, "requiredReserve": round(obr, 2), "totalUnfunded": round(ead, 2)})
 
         out = {
             "reportMetadata": report_metadata,
@@ -815,7 +888,7 @@ class Model:
         os.makedirs(report_dir, exist_ok=True)
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(out, f, indent=2)
-        print("[hanmi_acl_report] sections: segmentMethodology={}, collectivelyByMethodology={}, quantitativeSegments={}, netChargeOffs={}, qualitativeSegments={}, macroVars={}, individual={}, unfundedSegments={}, unfundedTrend={}".format(
+        print("[hanmi_acl_report] sections: segMethod={}, collective={}, quantSegs={}, netCO={}, qualSegs={}, macro={}, individual={}, unfundedSeg={}, unfundedTrend={}".format(
             len(segment_methodology), len(collectively_by_methodology), len(quantitative_by_segment.get("main", [])),
             len(net_chargeoffs_quarterly), len(qualitative_by_segment.get("main", [])), len(macroeconomic_baseline),
             len(individual_analysis), len(unfunded_by_segment), len(unfunded_trend)))
@@ -834,14 +907,12 @@ class Model:
         join_keys_used = []
         by_analysis = {}
         for aid in analysis_ids:
-            print("[debug_all_data] loading for same analysisId={}".format(aid))
             df_ref = self._load_parquet_for_analysis("instrumentReference", aid)
             df_res = self._load_parquet_for_analysis("instrumentResult", aid, filter_summary=True)
             df_rep = self._load_parquet_for_analysis("instrumentReporting", aid)
             ref_rows = len(df_ref) if df_ref is not None else 0
             res_rows = len(df_res) if df_res is not None else 0
             rep_rows = len(df_rep) if df_rep is not None else 0
-            print("[debug_all_data] analysisId={}: ref={}, result={}, reporting={} (all same analysis)".format(aid, ref_rows, res_rows, rep_rows))
             if df_ref is None or df_ref.empty:
                 by_analysis[str(aid)] = {"refRows": 0, "resultRows": res_rows, "reportingRows": rep_rows, "mergedRows": 0, "groupedSummary": [], "refColumns": [], "segmentationCandidates": {}, "error": "ref empty"}
                 continue
@@ -901,7 +972,7 @@ class Model:
         os.makedirs(report_dir, exist_ok=True)
         with open(debug_path, "w", encoding="utf-8") as f:
             json.dump(out, f, indent=2, default=str)
-        print("[debug_all_data] Wrote -> {} ({} analyses)".format(debug_path, len(by_analysis)))
+        print("[debug_all_data] built for {} analyses -> {}".format(len(by_analysis), debug_path))
 
     def create_report_export_zip(self):
         """Create report_export.zip in the report output dir containing all current files there (aggregate JSONs + analysisDetails)."""
@@ -922,7 +993,7 @@ class Model:
                     if os.path.isfile(full):
                         zf.write(full, arcname=f)
                         added.append(f)
-            print("[Model run] Step 4: Created {} with {} file(s): {}".format(zip_path, len(added), added))
+            print("[Model run] Step 4: zip created ({} files)".format(len(added)))
         except Exception as e:
             self.logger.warning("Failed to create report zip: {}".format(e))
 

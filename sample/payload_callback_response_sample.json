@@ -1,0 +1,13 @@
+{
+  "settings": {
+    "analyses": [
+      { "analysisId": "4647909", "quarterLabel": "Q3 2025" },
+      { "analysisId": "4647997", "quarterLabel": "Q4 2025" }
+    ],
+    "inputPaths": {
+      "instrumentResult": ["/path/to/inputPaths/4647909/instrumentResult", "/path/to/inputPaths/4647997/instrumentResult"],
+      "instrumentReporting": ["/path/to/inputPaths/4647909/instrumentReporting", "/path/to/inputPaths/4647997/instrumentReporting"],
+      "instrumentReference": ["/path/to/inputPaths/4647909/instrumentReference", "/path/to/inputPaths/4647997/instrumentReference"]
+    }
+  }
+}
