@@ -126,7 +126,9 @@ Tags are strings; this report uses `current`, `prior`, `priorYear`. Other report
 
 ## 4. Payload: upload a file or callback
 
-- **Upload a file (recommended):** Put **`analysis_metadata.json`** in the execution **input** directory (the path used as run input). The model loads it during the run. File contents = JSON with an **`analyses`** array (no `settings` wrapper). Replace analysis IDs with your IDs, then upload.
+- **Upload a file (recommended):** Put **`analysis_metadata.csv`** or **`analysis_metadata.json`** in the execution **input** directory (the path used as run input). The model looks for **CSV first** (helps when the wrapper has issues with JSON), then JSON.
+  - **CSV:** `analysis_metadata.csv` with header row and columns **analysisId** (required), **quarterLabel** (optional), **tags** (optional, comma-separated: `current`, `prior`, `priorYear`), **role** (optional, single value). Case-insensitive headers. See `sample/analysis_metadata.csv`.
+  - **JSON:** `analysis_metadata.json` with an **`analyses`** array (no `settings` wrapper). See `sample/analysis_metadata.json`.
 - **Callback:** Alternatively, the callback can return **analyses** in `settings`. Model normalizes and builds JSON.
 
 **inputPaths** must have one entry per category per analysis, in the same order as **analyses** (from callback or from run parameters).
@@ -149,5 +151,6 @@ The model **creates JSON data** only (e.g. `hanmi_acl_quarterly_report.json`). M
 | Quarter list + labels for tables | `model/model.py` → `_get_quarters_for_tables()`, `_get_quarter_label()` |
 | Metadata file load | `model/iosession.py` → `_load_analysis_metadata_from_input()` |
 | JSON report build | `model/model.py` → `build_hanmi_acl_quarterly_report()` |
-| Sample (two quarters) | `sample/analysis_metadata.json` |
+| Sample CSV (two quarters) | `sample/analysis_metadata.csv` |
+| Sample JSON (two quarters) | `sample/analysis_metadata.json` |
 | Sample (5 past quarters) | `sample/analysis_metadata_five_quarters.json` |

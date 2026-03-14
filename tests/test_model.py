@@ -198,6 +198,36 @@ class TestModelHelpers(unittest.TestCase):
         self.assertEqual(settings["analysisRoles"]["current"], "id2")
         self.assertEqual(settings["analysisRoles"]["prior"], "id1")
 
+    def test_parse_analysis_metadata_csv(self):
+        """CSV analysis payload parses to analyses list; normalizing yields same result as JSON."""
+        mrp = MagicMock()
+        mrp.settings = {}
+        with patch.object(model_module.iosession.IOSession, "getModelRunParameters", return_value=mrp):
+            with patch.object(model_module.iosession.IOSession, "create_io_directories", return_value={}):
+                io = model_module.iosession.IOSession(MagicMock(), "/fake/mrp.json", True, {})
+        csv_path = os.path.join(tempfile.gettempdir(), "test_analysis_metadata.csv")
+        try:
+            with open(csv_path, "w", encoding="utf-8", newline="") as f:
+                f.write("analysisId,quarterLabel,tags\n")
+                f.write("4647909,Q1 2025,prior\n")
+                f.write("4647997,Q2 2025,current\n")
+            analyses = io._parse_analysis_metadata_csv(csv_path)
+            self.assertEqual(len(analyses), 2)
+            self.assertEqual(analyses[0]["analysisId"], "4647909")
+            self.assertEqual(analyses[0]["quarterLabel"], "Q1 2025")
+            self.assertEqual(analyses[0]["tags"], ["prior"])
+            self.assertEqual(analyses[1]["analysisId"], "4647997")
+            self.assertEqual(analyses[1]["quarterLabel"], "Q2 2025")
+            self.assertEqual(analyses[1]["tags"], ["current"])
+            settings = {"analyses": analyses}
+            model_module.iosession.IOSession.normalize_analyses_to_settings(settings)
+            self.assertEqual(settings["analysisIds"], ["4647909", "4647997"])
+            self.assertEqual(settings["analysisRoles"]["current"], "4647997")
+            self.assertEqual(settings["analysisRoles"]["prior"], "4647909")
+        finally:
+            if os.path.isfile(csv_path):
+                os.unlink(csv_path)
+
 
 class TestBuildQuarterlySummaryReport(unittest.TestCase):
     """Tests for build_quarterly_summary_report with mocked IO and temp dirs."""

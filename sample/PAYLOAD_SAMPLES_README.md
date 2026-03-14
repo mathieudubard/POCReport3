@@ -6,13 +6,29 @@ Use these to try the multi-quarter / analyses config.
 
 **You provide the payload by uploading a file** into the execution input.
 
+- **Where to upload:** Under the execution **input** directory. The model looks under `input/` (and subdirs). **CSV preferred** if the wrapper has issues with JSON: the model looks for **`analysis_metadata.csv`** first, then **`analysis_metadata.json`**.
+
+### Option A: CSV (recommended when JSON is problematic)
+
+1. **Filename:** `analysis_metadata.csv`
+2. **Format:** Header row, then one row per analysis. Columns (case-insensitive): **analysisId** (required), **quarterLabel** (optional), **tags** (optional, comma-separated: `current`, `prior`, `priorYear`), **role** (optional, single value).
+
+**Example – upload as `analysis_metadata.csv`:**
+
+```csv
+analysisId,quarterLabel,tags
+4647909,Q1 2025,prior
+4647997,Q2 2025,current
+```
+
+Use **`analysis_metadata.csv`** in this folder; replace IDs/labels and upload. Omit `tags`/`role` to let the model infer current/prior from analysisDetails dates.
+
+### Option B: JSON
+
 1. **Filename:** `analysis_metadata.json`
-2. **Where to upload:** Under the execution **input** directory (the same prefix/path used as run input). The model looks for this file under `input/` (and subdirs) when it runs.
-3. **File contents:** Valid JSON with an `analyses` array. No `settings` wrapper.
+2. **File contents:** Valid JSON with an `analyses` array. No `settings` wrapper.
 
-**Example – two quarters (upload this as `analysis_metadata.json`):**
-
-Use **`analysis_metadata.json`** in this folder: rename or copy it, then upload. Or use the contents of **`payload_analyses_sample.json`**’s `settings` block but **without** the `"settings"` wrapper – i.e. upload a file that contains only:
+**Example – two quarters:**
 
 ```json
 {
@@ -23,9 +39,7 @@ Use **`analysis_metadata.json`** in this folder: rename or copy it, then upload.
 }
 ```
 
-Replace the analysis IDs with your real IDs. The model will normalize this and infer current/prior from analysisDetails dates if you don’t add tags.
-
-**Five quarters:** Upload **`analysis_metadata_five_quarters.json`** (or copy its contents) as `analysis_metadata.json` for a 5-quarter trend.
+**Five quarters:** use **`analysis_metadata_five_quarters.json`**.
 
 ---
 
@@ -37,7 +51,7 @@ If your run uses **settingsCallbackUrl**, the callback can return the payload in
 
 ## File reference
 
-| Use case | File to upload as `analysis_metadata.json` |
-|----------|--------------------------------------------|
-| Two quarters | `analysis_metadata.json` or contents above |
-| Five quarters | `analysis_metadata_five_quarters.json` |
+| Use case     | CSV (preferred)     | JSON alternative        |
+|-------------|---------------------|--------------------------|
+| Two quarters| `analysis_metadata.csv` | `analysis_metadata.json` or contents above |
+| Five quarters | Same CSV, add rows  | `analysis_metadata_five_quarters.json` |
