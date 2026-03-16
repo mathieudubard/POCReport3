@@ -1,4 +1,3 @@
-import csv
 from glob import glob as gg
 import json
 import logging
@@ -499,9 +498,6 @@ class IOSession :
     INPUT_ROOT_BASE = "input"
     MACRO_SCENARIO_BASELINE = "BASE"
 
-    ANALYSIS_METADATA_FILENAME = "analysis_metadata.json"
-    ANALYSIS_METADATA_CSV_FILENAME = "analysis_metadata.csv"
-
     @staticmethod
     def normalize_analyses_to_settings(settings):
         """
@@ -549,117 +545,6 @@ class IOSession :
         }
         if quarter_labels:
             settings["quarterLabels"] = quarter_labels
-
-    def _load_analysis_metadata_from_input(self):
-        """
-        If settings.analysisRoles is not already set, look for analysis metadata under
-        the execution input directory (optional payload). Prefer CSV (analysis_metadata.csv),
-        then JSON (analysis_metadata.json). If found, set settings['analyses'] and normalize
-        so the report builder gets analysisIds, analysisRoles, quarterLabels.
-        """
-        if self.model_run_parameters.settings.get("analysisRoles") is not None:
-            print("[getSourceInputFiles] analysis metadata: already set in settings (skipping file load)")
-            return
-        input_dir = os.path.join(self.local_temp_directory, "input")
-        if not os.path.isdir(input_dir):
-            print("[getSourceInputFiles] analysis metadata: no input dir (optional; using callback analysisIds + date-inferred roles)")
-            return
-        # Prefer CSV (wrapper-friendly), then JSON; search whole input tree
-        found_csv = None
-        found_json = None
-        for root, _dirs, files in os.walk(input_dir):
-            if self.ANALYSIS_METADATA_CSV_FILENAME in files and found_csv is None:
-                found_csv = os.path.join(root, self.ANALYSIS_METADATA_CSV_FILENAME)
-            if self.ANALYSIS_METADATA_FILENAME in files and found_json is None:
-                found_json = os.path.join(root, self.ANALYSIS_METADATA_FILENAME)
-        if found_csv:
-            analyses = self._parse_analysis_metadata_csv(found_csv)
-            if analyses:
-                self.model_run_parameters.settings["analyses"] = analyses
-                IOSession.normalize_analyses_to_settings(self.model_run_parameters.settings)
-                self.logger.info("Loaded analyses from %s: %s analyses -> analysisIds, analysisRoles", found_csv, len(analyses))
-                print("[getSourceInputFiles] Loaded analysis metadata from {} (CSV, analyses -> analysisIds, roles)".format(os.path.basename(found_csv)))
-                return
-        found = found_json
-        if not found:
-            print("[getSourceInputFiles] analysis metadata: {} or {} not found under input (optional)".format(
-                self.ANALYSIS_METADATA_CSV_FILENAME, self.ANALYSIS_METADATA_FILENAME))
-            return
-        try:
-            with open(found, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, JSONDecodeError) as e:
-            self.logger.warning("Failed to load %s: %s", found, e)
-            return
-        # One structure: "analyses" array -> normalize to analysisIds, analysisRoles, quarterLabels.
-        # Legacy: "current", "prior", "priorYear", "quarters" -> set analysisRoles (and quarterLabels if quarters are objects).
-        if not isinstance(data, dict):
-            return
-        if "analyses" in data and isinstance(data["analyses"], list):
-            self.model_run_parameters.settings["analyses"] = data["analyses"]
-            IOSession.normalize_analyses_to_settings(self.model_run_parameters.settings)
-            self.logger.info("Loaded analyses from %s: %s analyses -> analysisIds, analysisRoles", found, len(data["analyses"]))
-            print("[getSourceInputFiles] Loaded analysis metadata from {} (analyses -> analysisIds, roles)".format(os.path.basename(found)))
-            return
-        roles = dict(data)
-        quarters_raw = roles.get("quarters")
-        quarter_labels = {}
-        if isinstance(quarters_raw, list):
-            quarter_ids = []
-            for item in quarters_raw:
-                if isinstance(item, dict) and "analysisId" in item:
-                    aid = str(item["analysisId"])
-                    quarter_ids.append(aid)
-                    if item.get("quarterLabel"):
-                        quarter_labels[aid] = str(item["quarterLabel"])
-                else:
-                    quarter_ids.append(str(item))
-            roles["quarters"] = quarter_ids
-            if quarter_labels:
-                self.model_run_parameters.settings["quarterLabels"] = quarter_labels
-        self.model_run_parameters.settings["analysisRoles"] = roles
-        self.logger.info("Loaded analysis roles from %s: current=%s, prior=%s", found, roles.get("current"), roles.get("prior"))
-        print("[getSourceInputFiles] Loaded analysis metadata from {}".format(os.path.basename(found)))
-
-    def _parse_analysis_metadata_csv(self, path):
-        """
-        Parse analysis_metadata.csv into a list of dicts compatible with normalize_analyses_to_settings.
-        Columns: analysisId (required), quarterLabel (optional), tags (optional, comma-separated), role (optional, single value).
-        Header matching is case-insensitive. Returns list of {"analysisId", "quarterLabel"?, "tags"?} or empty list on error.
-        """
-        def get_col(row, names):
-            for n in names:
-                for k, v in (row or {}).items():
-                    if k and k.strip().lower() == n.lower():
-                        return (v or "").strip()
-            return ""
-        analyses = []
-        try:
-            with open(path, "r", encoding="utf-8", newline="") as f:
-                reader = csv.DictReader(f)
-                fieldnames = (reader.fieldnames or [])
-                if not fieldnames or not any(k.strip().lower() == "analysisid" for k in fieldnames):
-                    self.logger.warning("analysis_metadata.csv missing analysisId column (headers: %s)", fieldnames)
-                    return []
-                for row in reader:
-                    aid = get_col(row, ["analysisId", "analysisid"])
-                    if not aid:
-                        continue
-                    entry = {"analysisId": aid}
-                    qlabel = get_col(row, ["quarterLabel", "quarterlabel"])
-                    if qlabel:
-                        entry["quarterLabel"] = qlabel
-                    tags_raw = get_col(row, ["tags", "tag"])
-                    role_raw = get_col(row, ["role", "Role"])
-                    if tags_raw:
-                        entry["tags"] = [t.strip() for t in tags_raw.split(",") if t.strip()]
-                    elif role_raw:
-                        entry["tags"] = [role_raw]
-                    analyses.append(entry)
-        except (OSError, csv.Error) as e:
-            self.logger.warning("Failed to parse %s: %s", path, e)
-            return []
-        return analyses
 
     def _get_macro_scenario_date_from_analysis_details(self, report_dir, analysis_id):
         """
@@ -839,7 +724,6 @@ class IOSession :
                     else :
                         file = self._downloadFile(rem_file_path, loc_file_path)
 
-            self._load_analysis_metadata_from_input()
             print("[getSourceInputFiles] done: result, reporting, ref, analysisDetails (and macro if present) for {} analyses".format(n_analyses))
 
         else :
@@ -856,8 +740,8 @@ class IOSession :
                         rem_file_path = loc_file_path.replace(f'{self.local_temp_directory}/input', self.input_path)
                         if self.local_mode:
                             file = self._safeCopyFile(rem_file_path, loc_file_path)
-                    else:
-                        file = self._downloadFile(rem_file_path, loc_file_path)
+                        else:
+                            file = self._downloadFile(rem_file_path, loc_file_path)
                     input_files.update(file)
             else:
                 # Legacy: inputPath keyed by file name (e.g. 'instrumentReference.csv' -> directory path)
@@ -872,7 +756,6 @@ class IOSession :
                     else:
                         file = self._downloadFile(remote_file_path, local_file_path)
                     input_files.update(file)
-            self._load_analysis_metadata_from_input()
         print("[getSourceInputFiles] done")
         return input_files
 

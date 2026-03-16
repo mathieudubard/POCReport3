@@ -8,7 +8,7 @@ Compact context for agents. See README.md for full project layout.
 
 - **Entry:** `model/run.py` — run with `-j JWT -s <s3_key_to_modelRunParameter.json>` for S3 mode; `-L <local_folder>` for local.
 - **Flow:** Load model run parameters → list/fetch inputs from S3 (Cappy) → process instrumentResult → write report outputs → upload outputs to S3.
-- **Report output:** **Quarterly summary:** `quarterly_summary_report.json` (structured JSON for all 6 doc sections per `sample/useCase.txt`; current = first analysisId, prior = second). Plus `analysisDetails_{id}.json` per analysis (from `export/analysisidentifier={id}/analysisDetails.json`). `report_export.zip` contains all report files.
+- **Report output:** **Quarterly summary:** `quarterly_summary_report.json` (structured JSON for all 6 doc sections per `sample/useCase.txt`). Plus `analysisDetails_{id}.json` per analysis (from `export/analysisidentifier={id}/analysisDetails.json`). `report_export.zip` contains all report files. **Current/prior/priorYear and quarter order** are derived from **analysisDetails.reportingDate** (no metadata file); first analysisId in the array is not assumed to be latest.
 
 ---
 
@@ -32,7 +32,7 @@ Compact context for agents. See README.md for full project layout.
    - Non-callback path: still uses `inputPath` with `custInputs` and downloads from execution input.
 
 4. **Report step (model.py)**  
-   - **build_quarterly_summary_report()** (Step 3): Builds `quarterly_summary_report.json`. Current/prior from `_get_analysis_roles()` (or first/second analysisId). Section (1) Changes to ACL uses prior/current reserves and chargeOffs/recoveries/provision from **instrumentReporting**. Sections (2)–(3) join **instrumentResult** with **instrumentReference** on instrumentIdentifier for ascImpairmentEvaluation. Helper: `_load_parquet_for_analysis()`, `_find_column()`, `_filter_summary_scenario()`, `_safe_sum()`.
+   - **build_quarterly_summary_report()** (Step 3): Builds `quarterly_summary_report.json`. Resolves current/prior/priorYear and chronological quarters from analysisDetails dates via `_resolve_analysis_roles_from_dates()`; then uses `_get_analysis_roles()`. Section (1) Changes to ACL uses prior/current reserves and chargeOffs/recoveries/provision from **instrumentReporting**. Sections (2)–(3) join **instrumentResult** with **instrumentReference** on instrumentIdentifier for ascImpairmentEvaluation. Helper: `_load_parquet_for_analysis()`, `_find_column()`, `_filter_summary_scenario()`, `_safe_sum()`.
    - **build_hanmi_acl_quarterly_report()** (Step 3b): Builds `hanmi_acl_quarterly_report.json` with sections per `docs/REPORT_MAPPING.md` (segmentMethodology, collectivelyEvaluatedByMethodology, quantitativeLossRatesBySegment, netChargeOffsQuarterly, qualitativeReservesBySegment, macroeconomicBaseline from **macroEconomicVariableInput**, individualAnalysis, unfundedBySegment, unfundedTrend; parametersInventory/peerRatios/hanmiSummaryMetrics stubbed).
    - **analysisDetails (iosession.py):** For each analysis ID, download `export/analysisidentifier={id}/analysisDetails.json` (bucket root) into report dir as `analysisDetails_{id}.json` (done in getSourceInputFiles after parquet download).
    - **create_report_export_zip()** (Step 4): Zips all files in report dir (including `hanmi_acl_quarterly_report.json`) into `report_dir/report_export.zip`; zip is then uploaded with the rest of the report output.

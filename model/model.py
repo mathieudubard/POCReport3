@@ -348,45 +348,68 @@ class Model:
             by_seg_year[key] = by_seg_year.get(key, 0.0) + float(row.get("netChargeOffs") or 0)
         return [{"segment": seg, "year": year, "netChargeOffs": round(v, 2)} for (seg, year), v in sorted(by_seg_year.items())]
 
-    def _infer_analysis_roles_from_dates(self, report_dir, analysis_ids):
+    def _resolve_analysis_roles_from_dates(self, report_dir, analysis_ids):
         """
-        Infer current/prior/priorYear from analysisDetails reportingDate for each analysisId.
-        Latest date = current (if multiple share latest, first in list wins). Calendar quarter
-        before current = prior. Same quarter prior year = priorYear. Returns (current_id, prior_id, prior_year_id).
+        Use only the provided analysisIds array; scan analysisDetails for reportingDate and
+        set current/prior/priorYear and chronological quarters automatically. First in array is
+        not assumed to be latest – we sort by date. Writes to settings.analysisRoles and
+        settings.quarterLabels. Returns (current_id, prior_id, prior_year_id, quarters_list).
         """
         if not report_dir or not analysis_ids:
-            return None, None, None
+            return None, None, None, []
         dated = []
         for aid in analysis_ids:
             dt = self._get_reporting_date_from_analysis_details(report_dir, aid)
             dated.append((str(aid), dt))
-        dated = [(aid, dt) for aid, dt in dated if dt is not None]
-        if not dated:
-            return None, None, None
-        # Sort by date descending; for ties use original list order (first in list wins)
+        # Keep all; use original order for tie-break when date is missing or tied
         order = {str(aid): i for i, aid in enumerate(analysis_ids)}
-        dated.sort(key=lambda x: (-pd.Timestamp(x[1]).toordinal(), order.get(x[0], 999)))
-        current_id = dated[0][0]
-        current_dt = dated[0][1]
-        yq_current = self._date_to_quarter(current_dt)
-        if not yq_current:
-            return current_id, None, None
-        y_c, q_c = yq_current
-        prior_yq = (y_c, q_c - 1) if q_c > 1 else (y_c - 1, 4)
-        prior_year_yq = (y_c - 1, q_c)
-        prior_id = prior_year_id = None
-        for aid, dt in dated[1:]:
-            yq = self._date_to_quarter(dt)
-            if not yq:
-                continue
-            if yq == prior_yq and prior_id is None:
-                prior_id = aid
-            if yq == prior_year_yq and prior_year_id is None:
-                prior_year_id = aid
-            if prior_id and prior_year_id:
-                break
-        print("[hanmi_acl_report] inferred from dates: current={}, prior={}, priorYear={}".format(current_id, prior_id, prior_year_id))
-        return current_id, prior_id, prior_year_id
+        # Sort by date ascending (oldest first); None dates last, ties by original order
+        def sort_key(x):
+            aid, dt = x
+            if dt is None:
+                return (1, 0, order.get(aid, 999))
+            return (0, pd.Timestamp(dt).toordinal(), order.get(aid, 999))
+        dated.sort(key=sort_key)
+        # quarters_list = chronological (oldest first) for multi-quarter tables
+        quarters_list = [aid for aid, _ in dated]
+        # Current = latest date (last in sorted); prior = calendar quarter before; priorYear = same quarter prior year
+        with_dates = [(aid, dt) for aid, dt in dated if dt is not None]
+        if not with_dates:
+            current_id = quarters_list[0] if quarters_list else None
+            prior_id = prior_year_id = None
+        else:
+            current_id = with_dates[-1][0]
+            current_dt = with_dates[-1][1]
+            yq_current = self._date_to_quarter(current_dt)
+            prior_yq = (yq_current[0], yq_current[1] - 1) if yq_current[1] > 1 else (yq_current[0] - 1, 4) if yq_current else None
+            prior_year_yq = (yq_current[0] - 1, yq_current[1]) if yq_current else None
+            prior_id = prior_year_id = None
+            for aid, dt in reversed(with_dates[:-1]):
+                yq = self._date_to_quarter(dt)
+                if not yq:
+                    continue
+                if prior_id is None and yq == prior_yq:
+                    prior_id = aid
+                if prior_year_id is None and yq == prior_year_yq:
+                    prior_year_id = aid
+                if prior_id and prior_year_id:
+                    break
+        quarter_labels = {}
+        for aid, dt in dated:
+            if dt is not None:
+                quarter_labels[str(aid)] = "Q{} {}".format((dt.month - 1) // 3 + 1, dt.year)
+        io = self.io_session
+        io.model_run_parameters.settings["analysisRoles"] = {
+            "current": current_id,
+            "prior": prior_id,
+            "priorYear": prior_year_id,
+            "quarters": quarters_list,
+        }
+        if quarter_labels:
+            io.model_run_parameters.settings["quarterLabels"] = quarter_labels
+        print("[hanmi_acl_report] roles from dates: current={}, prior={}, priorYear={}, quarters={} (chronological)".format(
+            current_id, prior_id, prior_year_id, quarters_list))
+        return current_id, prior_id, prior_year_id, quarters_list
 
     def _get_analysis_roles(self):
         """
@@ -540,6 +563,8 @@ class Model:
             print("[Model run] Step 3: Skipped (no analysisIds).")
             self.logger.warning("No analysisIds; skipping quarterly summary report.")
             return
+        # Resolve current/prior/priorYear and chronological quarters from analysisDetails (used by both reports)
+        self._resolve_analysis_roles_from_dates(report_dir, analysis_ids)
         current_id, prior_id, prior_year_id, quarters_list = self._get_analysis_roles()
         df_current = self._load_parquet_for_analysis("instrumentResult", current_id, filter_summary=True)
         df_prior = self._load_parquet_for_analysis("instrumentResult", prior_id, filter_summary=True) if prior_id else None
@@ -679,20 +704,15 @@ class Model:
         if not analysis_ids:
             self.logger.warning("No analysisIds; skipping Hanmi ACL report.")
             return
-        # Infer current/prior/priorYear from analysisDetails dates if not set (no tags required in config)
-        roles = io.model_run_parameters.settings.get("analysisRoles") or {}
-        if roles.get("quarters") is None:
-            roles["quarters"] = [str(aid) for aid in analysis_ids]
-        if roles.get("current") is None or roles.get("prior") is None or roles.get("priorYear") is None:
-            inf_current, inf_prior, inf_prior_year = self._infer_analysis_roles_from_dates(report_dir, analysis_ids)
-            if inf_current and roles.get("current") is None:
-                roles["current"] = inf_current
-            if inf_prior and roles.get("prior") is None:
-                roles["prior"] = inf_prior
-            if inf_prior_year and roles.get("priorYear") is None:
-                roles["priorYear"] = inf_prior_year
-            io.model_run_parameters.settings["analysisRoles"] = roles
+        # Roles and quarters are set from dates in Step 3 (build_quarterly_summary_report); use them here
         current_id, prior_id, prior_year_id, quarters_list = self._get_analysis_roles()
+        if not quarters_list:
+            self._resolve_analysis_roles_from_dates(report_dir, analysis_ids)
+            current_id, prior_id, prior_year_id, quarters_list = self._get_analysis_roles()
+        if not quarters_list:
+            quarters_list = [str(aid) for aid in analysis_ids]
+            current_id = current_id or (analysis_ids[0] if analysis_ids else None)
+            prior_id = prior_id or (analysis_ids[1] if len(analysis_ids) >= 2 else None)
         print("[hanmi_acl_report] roles: current={}, prior={}, priorYear={}, quarters={}".format(
             current_id, prior_id, prior_year_id, quarters_list))
 

@@ -34,7 +34,7 @@ Run used **callback only** — **no input JSON analysis payload** was provided. 
 - **analysisIds** and **inputPaths** came from the **callback** only.
 - **current / prior** were **inferred from reportingDate** (latest = current, prior quarter = prior). **priorYear** = null because only two analyses.
 - **Quarter labels** (e.g. "Q2 2025", "Q1 2025") came from **analysisDetails.reportingDate** per analysis.
-- **analysis_metadata.json** was not used (no execution input dir in this run). To supply an `analyses` payload (e.g. tags, extra quarters, priorYear), the wrapper must either (1) include it in the callback response, or (2) place a file in the execution input so the model can load it (see MULTIQUARTER_SUPPORT.md and PAYLOAD_SAMPLES_README.md).
+- The model uses **only the analysisIds array** from the callback; it does not read any analysis metadata file. Roles and quarter order are derived from **analysisDetails.reportingDate** (see MULTIQUARTER_SUPPORT.md).
 
 ---
 

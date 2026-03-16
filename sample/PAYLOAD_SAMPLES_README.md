@@ -1,57 +1,24 @@
-# Sample payloads for analyses config
+# Analysis config: use analysisIds from callback (no metadata file)
 
-Use these to try the multi-quarter / analyses config.
+The model **does not** read analysis metadata from any file (CSV or JSON). It uses **only the array of analysis IDs** provided by the **callback** (or run parameters).
 
-## Upload a file (recommended)
+## How it works
 
-**You provide the payload by uploading a file** into the execution input.
+1. The **callback** returns **analysisIds** (and **inputPaths**) in `settings`. The first ID in the array is **not** assumed to be “latest” or “main”.
+2. The model downloads **analysisDetails** for each analysis (from `export/analysisidentifier={id}/analysisDetails.json`).
+3. It reads **reportingDate** from each and **automatically**:
+   - Sorts analyses **chronologically (oldest first)** for multi-quarter tables
+   - Sets **current** = analysis with the **latest** date
+   - Sets **prior** = analysis in the **calendar quarter before** current
+   - Sets **prior year** = analysis in the **same quarter, previous year** (if present)
+   - Builds **quarter labels** (e.g. `Q2 2025`) from reportingDate
 
-- **Where to upload:** Under the execution **input** directory. The model looks under `input/` (and subdirs). **CSV preferred** if the wrapper has issues with JSON: the model looks for **`analysis_metadata.csv`** first, then **`analysis_metadata.json`**.
+So you only need to supply **analysisIds** in the callback response; order does not matter. See **`payload_callback_response_sample.json`** for an example callback response (include `analysisIds` and `inputPaths` in `settings`).
 
-### Option A: CSV (recommended when JSON is problematic)
+## Callback response example
 
-1. **Filename:** `analysis_metadata.csv`
-2. **Format:** Header row, then one row per analysis. Columns (case-insensitive): **analysisId** (required), **quarterLabel** (optional), **tags** (optional, comma-separated: `current`, `prior`, `priorYear`), **role** (optional, single value).
+**`payload_callback_response_sample.json`** shows the `settings` object the callback returns: `analysisIds`, `inputPaths`, etc. Replace IDs and paths with your values.
 
-**Example – upload as `analysis_metadata.csv`:**
+## Legacy sample files
 
-```csv
-analysisId,quarterLabel,tags
-4647909,Q1 2025,prior
-4647997,Q2 2025,current
-```
-
-Use **`analysis_metadata.csv`** in this folder; replace IDs/labels and upload. Omit `tags`/`role` to let the model infer current/prior from analysisDetails dates.
-
-### Option B: JSON
-
-1. **Filename:** `analysis_metadata.json`
-2. **File contents:** Valid JSON with an `analyses` array. No `settings` wrapper.
-
-**Example – two quarters:**
-
-```json
-{
-  "analyses": [
-    { "analysisId": "4647909", "quarterLabel": "Q3 2025" },
-    { "analysisId": "4647997", "quarterLabel": "Q4 2025" }
-  ]
-}
-```
-
-**Five quarters:** use **`analysis_metadata_five_quarters.json`**.
-
----
-
-## Callback response (alternative)
-
-If your run uses **settingsCallbackUrl**, the callback can return the payload in the response instead of a file. **`payload_callback_response_sample.json`** is an example: the `settings` object (including `analyses` and `inputPaths`) is what the callback returns. Replace IDs and paths with your values.
-
----
-
-## File reference
-
-| Use case     | CSV (preferred)     | JSON alternative        |
-|-------------|---------------------|--------------------------|
-| Two quarters| `analysis_metadata.csv` | `analysis_metadata.json` or contents above |
-| Five quarters | Same CSV, add rows  | `analysis_metadata_five_quarters.json` |
+- **`analysis_metadata.json`**, **`analysis_metadata.csv`**, **`analysis_metadata_five_quarters.json`**: kept for reference only. The model **no longer** loads these; roles and quarters are derived from analysisDetails dates only.

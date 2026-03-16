@@ -1,33 +1,25 @@
-# Multi-Quarter Support – One Config, Any Number of Quarters (and Years)
+# Multi-Quarter Support – analysisIds Array + Date-Based Automation
 
-One input structure describes **an arbitrary number of past quarters**, **ordered**. **Tags are optional**: the model can infer current/prior/prior year from each analysis’s **reportingDate** in `analysisDetails`. It supports quarterly tables, yearly tables (by grouping the same analyses by year), and other reports; the model **produces JSON data** only.
+The model uses **only the provided array of analysis IDs** (e.g. from the callback). It does **not** read analysis metadata from files. **Current**, **prior**, **prior year**, **quarter order**, and **quarter labels** are derived automatically by scanning **analysisDetails** (reportingDate) for each analysis. The first ID in the array is **not** assumed to be latest – the model sorts by date. It supports quarterly tables, yearly tables (by grouping by year from reportingDate), and other reports; the model **produces JSON data** only.
 
 ---
 
-## 1. Config shape
+## 1. Input: array of analysis IDs
 
-**analyses**: array of entries in **chronological order** (oldest first). Each entry:
+- **analysisIds**: provided by the callback (or run parameters). Any order; the model **sorts by reportingDate** from `analysisDetails_{id}.json` to get chronological order.
+- **Quarter labels**: derived from each analysis’s **reportingDate** (e.g. `Q2 2025`). No separate metadata file.
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| **analysisId** | Yes | Analysis ID (string or number). |
-| **quarterLabel** | No | Display label (e.g. `"Q3 2025"`). If omitted, derived from `analysisDetails` → `reportingDate`. |
-| **tags** | No | Optional. Array of strings (e.g. `current`, `prior`, `priorYear`). If omitted, the model **infers** roles from dates (see §1.1). |
+### 1.1 Automatic mapping from analysisDetails dates
 
-**Backward compatibility**: if an entry has **role** (string) instead of **tags**, it is treated as `tags: [role]`.
+The model reads **reportingDate** from `analysisDetails_{analysisId}.json` for each analysis and:
 
-- **Order** = quarter order for multi-quarter tables (e.g. columns Q4 2024 … Q4 2025).
-- After normalization the model sets **analysisIds** (same order), **quarters** (full list), and **quarterLabels**. For **analysisRoles** (current/prior/priorYear): if tags are present they are used; otherwise the model **infers** from `analysisDetails` reportingDate when building the report.
+- **Sorts** all analysis IDs by date **ascending (oldest first)** → this is the **quarters** list used for multi-quarter tables.
+- **Current** = analysis with the **latest** reportingDate (last after sort). First in the provided array is not assumed to be “main”.
+- **Prior** = analysis whose reportingDate is in the **calendar quarter immediately before** the current quarter (e.g. current Q2 2025 → prior is Q1 2025).
+- **Prior year** = analysis whose reportingDate is in the **same calendar quarter, previous year** (e.g. current Q2 2025 → prior year is Q2 2024).
+- **Quarter labels** = `Q{n} {year}` from reportingDate for each analysis.
 
-### 1.1 Inferring current / prior / prior year from dates
-
-If **tags** are not set (or current/prior/priorYear are missing), the model reads **reportingDate** from `analysisDetails_{analysisId}.json` for each analysis and infers:
-
-- **Current** = analysis with the **latest** reportingDate. If multiple share the same date, the **first in the list** (in `analyses` order) is used.
-- **Prior** = analysis whose reportingDate falls in the **calendar quarter immediately before** the current quarter (e.g. current Q4 2025 → prior is Q3 2025).
-- **Prior year** = analysis whose reportingDate is in the **same calendar quarter, previous year** (e.g. current Q4 2025 → prior year is Q4 2024).
-
-So you can omit tags and pass only **analysisId** (and optional **quarterLabel**); the model infers roles from dates. You can still supply tags to override or when analysisDetails are not available.
+If an analysis has no analysisDetails or no reportingDate, it is still included in the quarters list (ordered after dated analyses); current/prior/priorYear fall back to the first IDs when no dates are found.
 
 ### 1.2 Yearly tables
 
@@ -37,8 +29,7 @@ Reports may include **yearly** tables (e.g. net charge-offs by year, reserves by
 
 ## 2. Waterfall
 
-- **Config provided** (payload or file): use **analyses** (ordered, optional tags/labels). Model normalizes and builds JSON for all quarters in the list.
-- **Config not provided**: use **analysisIds** only. Model infers current = first, prior = second, quarters = `[prior, current]` or `[current]`. Only supports two periods by position.
+- **analysisIds** from callback (or run parameters): model downloads analysisDetails for each, then **resolves** current/prior/priorYear and **chronological quarters** from reportingDate. All quarters in the list are used for multi-quarter tables. No file-based metadata.
 
 ---
 
@@ -124,20 +115,16 @@ Tags are strings; this report uses `current`, `prior`, `priorYear`. Other report
 
 ---
 
-## 4. Payload: upload a file or callback
+## 4. Payload: callback (no metadata file)
 
-- **Upload a file (recommended):** Put **`analysis_metadata.csv`** or **`analysis_metadata.json`** in the execution **input** directory (the path used as run input). The model looks for **CSV first** (helps when the wrapper has issues with JSON), then JSON.
-  - **CSV:** `analysis_metadata.csv` with header row and columns **analysisId** (required), **quarterLabel** (optional), **tags** (optional, comma-separated: `current`, `prior`, `priorYear`), **role** (optional, single value). Case-insensitive headers. See `sample/analysis_metadata.csv`.
-  - **JSON:** `analysis_metadata.json` with an **`analyses`** array (no `settings` wrapper). See `sample/analysis_metadata.json`.
-- **Callback:** Alternatively, the callback can return **analyses** in `settings`. Model normalizes and builds JSON.
-
-**inputPaths** must have one entry per category per analysis, in the same order as **analyses** (from callback or from run parameters).
+- The **callback** returns **analysisIds** (and **inputPaths**). The model does **not** read analysis metadata from any file. It uses only the analysisIds array and derives roles and quarter order from **analysisDetails** (reportingDate) after downloading them.
+- **inputPaths** must have one entry per category per analysis, in the same order as **analysisIds**.
 
 ---
 
 ## 5. Output
 
-The model **creates JSON data** only (e.g. `hanmi_acl_quarterly_report.json`). Multi-quarter sections (quantitative by segment, net charge-offs by quarter, unfunded trend, etc.) include one row or column per quarter in **analyses** order, with **quarterLabel** when available. No PDF/HTML is generated here; downstream can render tables (e.g. “quarterly net loss trends by segment”, $ in thousands) from this JSON.
+The model **creates JSON data** only (e.g. `hanmi_acl_quarterly_report.json`). Multi-quarter sections (quantitative by segment, net charge-offs by quarter, unfunded trend, etc.) include one row or column per quarter in **chronological** order (from dates), with **quarterLabel** when available. No PDF/HTML is generated here; downstream can render tables (e.g. “quarterly net loss trends by segment”, $ in thousands) from this JSON.
 
 ---
 
@@ -145,12 +132,7 @@ The model **creates JSON data** only (e.g. `hanmi_acl_quarterly_report.json`). M
 
 | Item | Location |
 |------|----------|
-| Normalize analyses (tags → analysisRoles, quarters, quarterLabels) | `model/iosession.py` → `IOSession.normalize_analyses_to_settings(settings)` |
-| Infer current/prior/priorYear from analysisDetails dates | `model/model.py` → `_infer_analysis_roles_from_dates(report_dir, analysis_ids)` |
-| Role resolution (current/prior/priorYear from analysisRoles) | `model/model.py` → `_get_analysis_roles()` |
+| Resolve roles + chronological quarters from analysisDetails dates | `model/model.py` → `_resolve_analysis_roles_from_dates(report_dir, analysis_ids)` |
+| Read current/prior/priorYear and quarters from settings | `model/model.py` → `_get_analysis_roles()` |
 | Quarter list + labels for tables | `model/model.py` → `_get_quarters_for_tables()`, `_get_quarter_label()` |
-| Metadata file load | `model/iosession.py` → `_load_analysis_metadata_from_input()` |
 | JSON report build | `model/model.py` → `build_hanmi_acl_quarterly_report()` |
-| Sample CSV (two quarters) | `sample/analysis_metadata.csv` |
-| Sample JSON (two quarters) | `sample/analysis_metadata.json` |
-| Sample (5 past quarters) | `sample/analysis_metadata_five_quarters.json` |
