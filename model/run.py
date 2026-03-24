@@ -7,7 +7,48 @@ MODEL_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 PACKAGE_DIRECTORY = os.path.dirname(MODEL_DIRECTORY)
 sys.path.append(PACKAGE_DIRECTORY)
 from config import config
-from model import Model
+
+
+def run_model_batch(args, return_model=False):
+    """
+    Execute the model in ManagedBatch style: JWT or user/pass, MRP from S3 (-s) or local (-L).
+    This is the single batch entry point used by the CLI; a future Interactive/API layer can
+    call it after building args (or a dedicated API session) — see docs/HANMI_BATCH_AND_INTERACTIVE.md.
+
+    If return_model is True, returns (exit_code, model) so callers can read model.report_response_payload
+    (when settings.returnReportsInResponse is set). Otherwise returns exit_code only.
+    """
+    logger = logging.getLogger(__name__)
+    model_run_parameters_path = args.s3 if args.s3 else args.local
+    local_mode = bool(args.local)
+    credentials = {'jwt': args.jwt, 'username': args.unpw[0], 'password': args.unpw[1]}
+    if not args.proxyjwt and args.proxyunpw == [None, None]:
+        proxy_credentials = {}
+    else:
+        proxy_credentials = {'jwt': args.proxyjwt, 'username': args.proxyunpw[0], 'password': args.proxyunpw[1], 'sso_url': os.environ.get('PROXY_TOKEN_URL')}
+    model = None
+    try:
+        from model import Model
+
+        print("[Model run] mode={}, path={}".format("local" if local_mode else "S3", model_run_parameters_path))
+        logger.info('Running Model')
+        model = Model(credentials, proxy_credentials, model_run_parameters_path, local_mode)
+        model.run()
+        print("[Model run] Completed successfully")
+        logger.info('Model execution completed')
+        exit_code = 0
+    except Exception as e:
+        print("[Model run] FAILED: {}".format(e))
+        logger.error(f'Model failed with exception: {sys.exc_info()}', exc_info=True)
+        logger.debug(e)
+        exit_code = 1
+    if model is not None:
+        model.cleanUp(log_file=config.LOG_FILE, keep_temp=args.keeptemp)
+    logger.info(f'Exit code: {exit_code}')
+    logging.shutdown()
+    if return_model:
+        return exit_code, model
+    return exit_code
 
 
 def _parseInputArguments():
@@ -29,41 +70,17 @@ def _parseInputArguments():
     proxy.add_argument('-p', '--proxyunpw', help='Use proxy username and password for API access', nargs=2, metavar=('USERNAME', 'PASSWORD'), default=[None, None])
     return parser.parse_args()
 
+
 def _runModel(args):
-    logger = logging.getLogger(__name__)
-    model_run_parameters_path = args.s3 if args.s3 else args.local
-    local_mode = bool(args.local)
-    credentials = {'jwt': args.jwt, 'username': args.unpw[0], 'password': args.unpw[1]}
-    if not args.proxyjwt and args.proxyunpw == [None, None]:
-        proxy_credentials = {}
-    else:
-        proxy_credentials = {'jwt': args.proxyjwt, 'username': args.proxyunpw[0], 'password': args.proxyunpw[1], 'sso_url': os.environ.get('PROXY_TOKEN_URL')}
-    try:
-        print("[Model run] mode={}, path={}".format("local" if local_mode else "S3", model_run_parameters_path))
-        logger.info('Running Model')
-        model = Model(credentials, proxy_credentials, model_run_parameters_path, local_mode)
-        model.run()
-        print("[Model run] Completed successfully")
-        logger.info('Model execution completed')
-        exit_code = 0
-    except Exception as e:
-        print("[Model run] FAILED: {}".format(e))
-        logger.error(f'Model failed with exception: {sys.exc_info()}', exc_info=True)
-        logger.debug(e)
-        exit_code = 1
-    try:
-        model.cleanUp(log_file=config.LOG_FILE, keep_temp=args.keeptemp)
-    except UnboundLocalError:
-        pass  # An authentication error will prevent instantiation of Model object, and UnboundLocalError unnecessarily clutters call stack
-    logger.info(f'Exit code: {exit_code}')
-    logging.shutdown()
-    return exit_code
+    """Backward-compatible name for batch execution; prefer :func:`run_model_batch`."""
+    return run_model_batch(args)
+
 
 def main():
     args = _parseInputArguments()
     config.configureLogger(args.loglevel)
     config.processConfigurations(args.overwrite, args.config, args.usedefaults)
-    exit_code = _runModel(args)
+    exit_code = run_model_batch(args)
     sys.exit(exit_code)
 
 if __name__ == '__main__':

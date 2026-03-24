@@ -41,6 +41,22 @@ class ModelRunParameters :
         self.callBack = self._set_additional_settings(model_run_paramter_json, credentials)
         self.json.update({'settings' : self.settings})
 
+    def use_per_analysis_s3_download(self):
+        """
+        True when inputs should be loaded per analysis from bucket-root paths (output/..., export/...),
+        using JWT/S3 — same layout as after a successful settings callback.
+
+        - callBack True: legacy path (HTTP callback merged analysisIds / inputPaths).
+        - callBack False but settings.liveS3InputsByAnalysisId True and analysisIds non-empty:
+          interactive/API-style runs that pass only metadata (e.g. analysisIds, name) and fetch parquet live from S3.
+        """
+        if self.callBack:
+            return True
+        ids = self.settings.get("analysisIds") or []
+        if not ids:
+            return False
+        return bool(self.settings.get("liveS3InputsByAnalysisId"))
+
     def _set_additional_settings(self, model_run_parameter_json, credentials) :
         settingsCallbackUrlParam = next((s for s in self.model_settings if s == 'settingsCallbackUrl'), None)
         settingsCallbackUrl = model_run_parameter_json.get('settings', {}).get('settingsCallbackUrl')
@@ -141,12 +157,13 @@ class IOSession :
             path = self.initializeDirectory(f'{self.local_temp_directory}/outputPaths/{file}')
             local_directories['outputPaths'].update({file : path})
 
-        print("[create_io_directories] callBack={}, payload_files={}".format(
-            self.model_run_parameters.callBack, len(cont)))
-        if self.model_run_parameters.callBack is True :
+        print("[create_io_directories] per_analysis_s3={}, callBack={}, payload_files={}".format(
+            self.model_run_parameters.use_per_analysis_s3_download(), self.model_run_parameters.callBack, len(cont)))
+        if self.model_run_parameters.use_per_analysis_s3_download():
             analysis_ids = self.model_run_parameters.settings.get('analysisIds', []) or []
             local_directories['inputPaths'] = {}
-            for file1, inputs in self.model_run_parameters.settings['inputPaths'].items() :
+            input_paths_map = self.model_run_parameters.settings.get("inputPaths") or {}
+            for file1, inputs in input_paths_map.items():
                 analysis_path = []
                 for idx, elem in enumerate(inputs):
                     # Use analysisIds by index so each analysis gets its own dir (elem path may be "output/.../analysisidentifier=4647997/..." where [1] is "instrumentResult", not the id)
@@ -594,8 +611,8 @@ class IOSession :
             return None
 
     def getSourceInputFiles(self) :
-        print("[getSourceInputFiles] callBack={}".format(self.model_run_parameters.callBack))
-        if self.model_run_parameters.callBack is True :
+        print("[getSourceInputFiles] per_analysis_s3={}".format(self.model_run_parameters.use_per_analysis_s3_download()))
+        if self.model_run_parameters.use_per_analysis_s3_download():
             source_input_directory = self.local_directories.get('inputPaths')
             input_files = {}
             analysis_ids = self.model_run_parameters.settings.get('analysisIds', [])

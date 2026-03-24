@@ -5,6 +5,7 @@ Run from project root: python -m pytest tests/ -v
 """
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -43,6 +44,15 @@ def _make_mock_io_session(local_directories=None, call_back=True, analysis_ids=N
     mock_mrp = MagicMock()
     mock_mrp.callBack = call_back
     mock_mrp.settings = {"analysisIds": analysis_ids or [4647997, 4647909]}
+
+    def _use_per_analysis_s3_download():
+        if mock_mrp.callBack:
+            return True
+        st = mock_mrp.settings or {}
+        ids = st.get("analysisIds") or []
+        return bool(ids) and bool(st.get("liveS3InputsByAnalysisId"))
+
+    mock_mrp.use_per_analysis_s3_download = _use_per_analysis_s3_download
     mock_io.model_run_parameters = mock_mrp
     mock_io.local_temp_directory = tempfile.mkdtemp()
     return mock_io
@@ -198,6 +208,50 @@ class TestModelHelpers(unittest.TestCase):
         self.assertEqual(settings["analysisRoles"]["current"], "id2")
         self.assertEqual(settings["analysisRoles"]["prior"], "id1")
 
+    def test_collect_json_reports_from_directory(self):
+        """collect_json_reports_from_directory parses each *.json in the report dir."""
+        d = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(d, "a.json"), "w", encoding="utf-8") as f:
+                json.dump({"x": 1}, f)
+            with open(os.path.join(d, "skip.txt"), "w", encoding="utf-8") as f:
+                f.write("no")
+            got = model_module.Model.collect_json_reports_from_directory(d)
+            self.assertEqual(got["a.json"], {"x": 1})
+            self.assertNotIn("skip.txt", got)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_use_per_analysis_s3_download_live_flag(self):
+        """liveS3InputsByAnalysisId + analysisIds enables per-analysis S3 mode without HTTP callback."""
+        base = {
+            "name": "t",
+            "datasets": {
+                "modelFactors": [],
+                "inputData": {},
+                "outputData": {},
+                "supportingData": {},
+                "settings": [],
+            },
+            "settings": {
+                "inputPath": "apps/exec/input",
+                "outputPaths": {"report": "apps/exec/output/report"},
+                "logPath": "apps/exec/log",
+                "runDate": "2025-01-01",
+                "reportingDate": "2025-01-01",
+                "analysisIds": ["4647997"],
+                "liveS3InputsByAnalysisId": True,
+            },
+        }
+        mrp = model_module.iosession.ModelRunParameters(dict(base), "/tmp/mrp.json", {})
+        self.assertFalse(mrp.callBack)
+        self.assertTrue(mrp.use_per_analysis_s3_download())
+        base2 = dict(base)
+        base2["settings"] = dict(base["settings"])
+        base2["settings"]["liveS3InputsByAnalysisId"] = False
+        mrp2 = model_module.iosession.ModelRunParameters(base2, "/tmp/mrp.json", {})
+        self.assertFalse(mrp2.use_per_analysis_s3_download())
+
 class TestBuildQuarterlySummaryReport(unittest.TestCase):
     """Tests for build_quarterly_summary_report with mocked IO and temp dirs."""
 
@@ -224,8 +278,17 @@ class TestBuildQuarterlySummaryReport(unittest.TestCase):
 
     def test_skips_when_no_callback(self):
         self.model.io_session.model_run_parameters.callBack = False
+        self.model.io_session.model_run_parameters.settings.pop("liveS3InputsByAnalysisId", None)
         self.model.build_quarterly_summary_report()
         self.assertFalse(os.path.exists(os.path.join(self.report_dir, "quarterly_summary_report.json")))
+
+    def test_writes_when_live_s3_metadata_without_callback(self):
+        """Interactive-style: no HTTP callback, but liveS3InputsByAnalysisId + analysisIds enables reports."""
+        self.model.io_session.model_run_parameters.callBack = False
+        self.model.io_session.model_run_parameters.settings["liveS3InputsByAnalysisId"] = True
+        self.model.build_quarterly_summary_report()
+        path = os.path.join(self.report_dir, "quarterly_summary_report.json")
+        self.assertTrue(os.path.isfile(path), path)
 
     def test_skips_when_no_analysis_ids(self):
         self.model.io_session.model_run_parameters.settings["analysisIds"] = []

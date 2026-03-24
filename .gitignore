@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+.venv/
+venv/
+.env
+*.egg-info/
+dist/
+build/
+
+# Personal scratch (URLs, Bearer lines, etc.)
+Notes.txt
+
+# Generated report samples (regenerate locally after a run)
+outputs/
+
+# Reference clone: large CSVs use Git LFS; do not commit without full LFS blobs + push
+synchronous2/

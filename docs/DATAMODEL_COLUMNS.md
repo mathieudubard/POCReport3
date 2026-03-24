@@ -1,6 +1,6 @@
 # Report → Data Dictionary Column Mapping
 
-Canonical attribute names from **datamodel/ImpairmentStudio-DataDictionary.csv** (Attribute Name column). The report builder resolves columns with **datamodel name first**, then flexible variants (lowercase, spaces/underscores), so parquet written with different casing still matches.
+Canonical attribute names from datamodel/ImpairmentStudio-DataDictionary.csv (Attribute Name column). The report builder resolves columns with datamodel name first, then flexible variants (lowercase, spaces/underscores), so parquet written with different casing still matches.
 
 ---
 
@@ -10,7 +10,7 @@ Canonical attribute names from **datamodel/ImpairmentStudio-DataDictionary.csv**
 |------------|--------------------------|--------|
 | Join key | `instrumentIdentifier` | Required for all result/reporting joins |
 | Join key (optional) | `analysisIdentifier` | When present in both sides |
-| Segment / portfolio | `portfolioIdentifier` | First-preference segment dimension; see **Segmentation dimensions** below |
+| Segment / portfolio | `portfolioIdentifier` | First-preference segment dimension; see Segmentation dimensions below |
 | Evaluation type | `ascImpairmentEvaluation` | Collectively vs Individually evaluated |
 | Methodology (PD) | `pdModelName` | Fallback when lossRateModelName null |
 | Methodology (LGD) | `lgdModelName` | Fallback when lossRateModelName null |
@@ -20,7 +20,7 @@ Canonical attribute names from **datamodel/ImpairmentStudio-DataDictionary.csv**
 
 ## Segmentation dimensions (instrumentReference)
 
-The report uses **one** segment dimension per dataset: the first candidate below that exists in the ref parquet and has at least one non-null value. Used for segmentMethodology, quantitativeLossRatesBySegment, qualitativeReservesBySegment, unfundedBySegment (and debug groupBy). Order of preference:
+The report uses one segment dimension per dataset: the first candidate below that exists in the ref parquet and has at least one non-null value. Used for segmentMethodology, quantitativeLossRatesBySegment, qualitativeReservesBySegment, unfundedBySegment (and debug groupBy). Order of preference:
 
 | Order | Datamodel attribute name | Notes |
 |-------|---------------------------|--------|
@@ -81,8 +81,8 @@ Defined in `model.py` as `SEGMENT_DIMENSION_CANDIDATES`; resolved via `_get_segm
 
 ## Column resolution (model.py)
 
-- **`_find_column(df, name)`**: Case-insensitive exact match (e.g. `portfolioIdentifier` matches `portfolioidentifier`).
-- **`_resolve_column(df, canonical_name, *variants)`**: Tries `_find_column(canonical_name)` then `_find_column_flexible(canonical_name, *variants)` so that datamodel camelCase and platform lowercase/spaced names both resolve.
-- **Report and debug** use `_resolve_column` for portfolioIdentifier, ascImpairmentEvaluation, and methodology columns (lossRateModelName, pdModelName, lgdModelName) so one resolution strategy is used everywhere and segmentMethodology matches the debug summary.
+- `_find_column(df, name)`: Case-insensitive exact match (e.g. `portfolioIdentifier` matches `portfolioidentifier`).
+- `_resolve_column(df, canonical_name, *variants)`: Tries `_find_column(canonical_name)` then `_find_column_flexible(canonical_name, *variants)` so that datamodel camelCase and platform lowercase/spaced names both resolve.
+- Report and debug use `_resolve_column` for portfolioIdentifier, ascImpairmentEvaluation, and methodology columns (lossRateModelName, pdModelName, lgdModelName) so one resolution strategy is used everywhere and segmentMethodology matches the debug summary.
 
 When adding new report fields, use the attribute name from the data dictionary and resolve with `_resolve_column(df, "attributeName", "attributename")` (and any other known variants) to avoid empty sections when parquet column names differ.

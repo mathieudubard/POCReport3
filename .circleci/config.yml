@@ -1,0 +1,121 @@
+# Hanmi Model Report Generator — CI based on synchronous2 pattern.
+# - Tests: pytest on every branch.
+# - Image: API Dockerfile pushed to AWS ECR (not GitHub Packages) after manual approval on filtered branches.
+#   Configure contexts (e.g. ers-rafa-qa) and env vars in the CircleCI project; align branch filters with your process.
+
+version: 2.1
+
+executors:
+  py_executor:
+    docker:
+      - image: cimg/python:3.12
+    working_directory: ~/repo
+
+orbs:
+  aws-ecr: circleci/aws-ecr@6.3.0
+
+commands:
+  init_env:
+    description: "Initialize environment variables for ECR build"
+    steps:
+      - run:
+          name: Initialize environment variables
+          command: |
+            echo 'export AWS_ECR_PATH=${PWD}' >> $BASH_ENV
+            echo 'export AWS_ECR_REPO=${AWS_ECR_NAMESPACE}/${CIRCLE_PROJECT_REPONAME}' >> $BASH_ENV
+            echo "export GIT_HASH=$(git -C . rev-parse --short=11 HEAD)" >> $BASH_ENV
+            echo 'export ARG_PIP_INDEX_URL=${NEXUS_PYPI_PROTOCOL}://${NEXUS_PYPI_USER_NAME}:${NEXUS_PYPI_USER_PASSWORD}@${NEXUS_PYPI_PRURL}' >> $BASH_ENV
+            source $BASH_ENV
+            printenv
+
+  run_hanmi_tests:
+    description: "Run Hanmi unit tests and publish JUnit to CircleCI"
+    steps:
+      - run:
+          name: Install dependencies and run tests
+          command: |
+            pip install --user -r requirements.txt
+            mkdir -p test-results/junit
+            pytest tests/ -v --junitxml=test-results/junit/report.xml
+      - store_test_results:
+          path: test-results
+
+jobs:
+  test:
+    description: Run Hanmi pytest suite
+    executor:
+      name: py_executor
+    steps:
+      - checkout
+      - run_hanmi_tests
+
+  build_and_push_image:
+    description: "Build API Docker image and push to AWS ECR"
+    executor:
+      name: py_executor
+    steps:
+      - checkout
+      - init_env
+      - aws-ecr/build-and-push-image:
+          account-url: AWS_ECR_URL
+          aws-access-key-id: AWS_ACCESS_KEY_ID
+          aws-secret-access-key: AWS_SECRET_ACCESS_KEY
+          setup-remote-docker: true
+          create-repo: true
+          checkout: false
+          dockerfile: dockerbuild/api/Dockerfile
+          region: SI_RAFA_GLOBAL_REGION
+          path: $AWS_ECR_PATH
+          repo: "${AWS_ECR_REPO}-api"
+          tag: '${CIRCLE_BRANCH}-${GIT_HASH},latest'
+          extra-build-args: '--build-arg PIP_INDEX_URL=${ARG_PIP_INDEX_URL}'
+
+workflows:
+  version: 2.1
+  test_and_deploy:
+    jobs:
+      - test
+
+      - approve_build_and_deployment:
+          type: approval
+          requires:
+            - test
+          filters:
+            branches:
+              only: /^qa.*|^ea.*|^ci.*|^prd.*|^release.*|^base-image-.*/
+
+      - build_and_push_image:
+          name: build-and-push-api-qa
+          context: ers-rafa-qa
+          requires:
+            - approve_build_and_deployment
+          filters:
+            branches:
+              only: /^qa.*/
+
+      - build_and_push_image:
+          name: build-and-push-api-ea
+          context: ers-rfsencap-ea
+          requires:
+            - approve_build_and_deployment
+          filters:
+            branches:
+              only: /^ea.*/
+
+      - build_and_push_image:
+          name: build-and-push-api-ci
+          context: ers-rfsencap-ci
+          requires:
+            - approve_build_and_deployment
+          filters:
+            branches:
+              only: /^ci.*/
+
+      - build_and_push_image:
+          name: build-and-push-api-prd
+          context: ers-rafa-prd
+          requires:
+            - approve_build_and_deployment
+          filters:
+            branches:
+              only: /^release.*|^prd.*/

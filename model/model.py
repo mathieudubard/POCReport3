@@ -3,6 +3,7 @@ import glob
 import iosession
 import json
 import logging
+from json import JSONDecodeError
 import os
 import re
 import pandas as pd
@@ -60,6 +61,8 @@ class Model:
         self.model_run_parameters = self.io_session.model_run_parameters
         if proxy_credentials:
             self.proxy_cap_session = Cappy(**proxy_credentials, errors='log')
+        # When settings.returnReportsInResponse is true, run() sets this to {"reports": {filename: object, ...}} for API responses.
+        self.report_response_payload = None
 
     def run(self):
         print("[Model run] START")
@@ -79,6 +82,8 @@ class Model:
 
         print("[Model run] Step 4: Create zip of all report output files")
         self.create_report_export_zip()
+
+        self._build_report_response_payload()
 
         print("[Model run] Step 5: Create local model run parameters")
         new_mrp = self.createLocalModelRunParameters()
@@ -550,8 +555,8 @@ class Model:
         Datamodel: datamodel/ImpairmentStudio-DataDictionary.csv.
         """
         io = self.io_session
-        if not io.model_run_parameters.callBack:
-            print("[Model run] Step 3: Skipped (callBack is False).")
+        if not io.model_run_parameters.use_per_analysis_s3_download():
+            print("[Model run] Step 3: Skipped (no per-analysis S3 input mode).")
             return
         report_dir = io.local_directories.get("outputPaths", {}).get("report")
         if not report_dir:
@@ -693,8 +698,8 @@ class Model:
         Uses instrumentResult (Summary), instrumentReporting, instrumentReference, and optional macroEconomicVariableInput (Baseline).
         """
         io = self.io_session
-        if not io.model_run_parameters.callBack:
-            print("[Model run] Step 3b: Skipped (callBack is False).")
+        if not io.model_run_parameters.use_per_analysis_s3_download():
+            print("[Model run] Step 3b: Skipped (no per-analysis S3 input mode).")
             return
         report_dir = io.local_directories.get("outputPaths", {}).get("report")
         if not report_dir:
@@ -1089,6 +1094,41 @@ class Model:
         with open(debug_path, "w", encoding="utf-8") as f:
             json.dump(out, f, indent=2, default=str)
         print("[debug_all_data] built for {} analyses -> {}".format(len(by_analysis), debug_path))
+
+    def _build_report_response_payload(self):
+        """
+        If settings.returnReportsInResponse is true, load every *.json in the report output dir into
+        self.report_response_payload for HTTP handlers (Interactive /v1/run) to return as the response body.
+        Excludes embedding binary zip; JSON parse failures are stored as {"_parseError": "..."}.
+        """
+        if not self.model_run_parameters.settings.get("returnReportsInResponse"):
+            self.report_response_payload = None
+            return
+        report_dir = self.io_session.local_directories.get("outputPaths", {}).get("report")
+        reports = Model.collect_json_reports_from_directory(report_dir)
+        self.report_response_payload = {"reports": reports}
+        print("[Model run] report_response_payload: {} JSON file(s)".format(len(reports)))
+
+    @staticmethod
+    def collect_json_reports_from_directory(report_dir):
+        """Load all top-level *.json files from report_dir into {filename: dict}. Public for tests."""
+        if not report_dir or not os.path.isdir(report_dir):
+            return {}
+        out = {}
+        for fname in sorted(os.listdir(report_dir)):
+            if not fname.endswith(".json"):
+                continue
+            path = os.path.join(report_dir, fname)
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    out[fname] = json.load(f)
+            except (OSError, UnicodeDecodeError) as e:
+                out[fname] = {"_parseError": str(e), "_file": fname}
+            except JSONDecodeError as e:
+                out[fname] = {"_parseError": str(e), "_file": fname}
+        return out
 
     def create_report_export_zip(self):
         """Create report_export.zip in the report output dir containing all current files there (aggregate JSONs + analysisDetails)."""
