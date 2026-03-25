@@ -36,23 +36,35 @@ def run_model_batch(args, return_model=False):
     logger = logging.getLogger(__name__)
     model_run_parameters_path = args.s3 if args.s3 else args.local
     local_mode = bool(args.local)
+
+    from model.jwt_normalize import normalize_bearer_jwt, validate_compact_jwt_three_segments
+
+    jwt_for_cappy = args.jwt
+    if jwt_for_cappy:
+        jwt_for_cappy = normalize_bearer_jwt(jwt_for_cappy)
+        validate_compact_jwt_three_segments(jwt_for_cappy)
+
     credentials = {
-        'jwt': args.jwt,
+        'jwt': jwt_for_cappy,
         'username': args.unpw[0],
         'password': args.unpw[1],
         # Cappy reads these from kwargs; env alone is not always applied (e.g. some Domino runtimes).
         'sso_url': config.resolve_sso_url_for_cappy(),
-        'tenant_url': config.resolve_tenant_url_for_cappy(jwt=args.jwt),
+        'tenant_url': config.resolve_tenant_url_for_cappy(jwt=jwt_for_cappy),
     }
     if not args.proxyjwt and args.proxyunpw == [None, None]:
         proxy_credentials = {}
     else:
+        proxy_jwt = args.proxyjwt
+        if proxy_jwt:
+            proxy_jwt = normalize_bearer_jwt(proxy_jwt)
+            validate_compact_jwt_three_segments(proxy_jwt)
         proxy_credentials = {
-            'jwt': args.proxyjwt,
+            'jwt': proxy_jwt,
             'username': args.proxyunpw[0],
             'password': args.proxyunpw[1],
             'sso_url': os.environ.get('PROXY_TOKEN_URL'),
-            'tenant_url': config.resolve_tenant_url_for_cappy(jwt=args.proxyjwt),
+            'tenant_url': config.resolve_tenant_url_for_cappy(jwt=proxy_jwt),
         }
         if not (proxy_credentials.get("sso_url") or "").strip():
             cappy_echo_warning(

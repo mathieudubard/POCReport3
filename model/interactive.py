@@ -178,9 +178,15 @@ def interactive_run(
            the host injects SSO/tenant URLs without using ``local.ini``.
     :param keep_temp: Retain IOSession temp dirs on success (debug).
     :raises RuntimeError: if the model run fails or the quarterly summary JSON is missing / failed to parse.
+    :raises ValueError: if ``jwt`` is missing or not a compact JWT (three segments); avoids opaque jose errors.
     """
     if not jwt or not str(jwt).strip():
         raise ValueError("jwt is required")
+
+    from model.jwt_normalize import normalize_bearer_jwt, validate_compact_jwt_three_segments
+
+    jwt_norm = normalize_bearer_jwt(jwt)
+    validate_compact_jwt_three_segments(jwt_norm)
 
     from config import config
     from model.run import run_model_batch
@@ -204,7 +210,7 @@ def interactive_run(
             json.dump(mrp, f, indent=2)
 
         ns = argparse.Namespace(
-            jwt=str(jwt).strip(),
+            jwt=jwt_norm,
             unpw=[None, None],
             local=os.path.abspath(mrp_path).replace("\\", "/"),
             s3=None,
