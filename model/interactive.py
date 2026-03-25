@@ -92,7 +92,7 @@ def interactive_run(
     analyses: Optional[List[Dict[str, Any]]] = None,
     settings_patch: Optional[Dict[str, Any]] = None,
     configure_logging: bool = True,
-    load_host_config: bool = False,
+    load_host_config: bool = True,
     keep_temp: bool = False,
 ) -> Dict[str, Any]:
     """
@@ -108,8 +108,10 @@ def interactive_run(
     :param run_name: ``modelRunParameter.name`` / logging (default ``interactive_run``).
     :param analyses: Optional rich analyses array (quarter labels, roles); merged via ``normalize_analyses_to_settings``.
     :param settings_patch: Merged into ``settings`` after defaults. ``libraryMode`` remains forced on.
-    :param configure_logging: If True, call ``config.configureLogger()`` once before the run.
-    :param load_host_config: If True, load ``config/local.ini`` via ``processConfigurations`` (Cappy URLs, etc.).
+    :param configure_logging: If True, call ``config.configureLogger()`` after loading host config.
+    :param load_host_config: If True (default), load ``config/local.ini`` into ``os.environ`` (``MOODYS_SSO_URL``, etc.).
+           **Required for Cappy** unless those variables are already set in the process environment. Set False only when
+           the host injects SSO/tenant URLs without using ``local.ini``.
     :param keep_temp: Retain IOSession temp dirs on success (debug).
     :raises RuntimeError: if the model run fails or the quarterly summary JSON is missing / failed to parse.
     """
@@ -119,10 +121,10 @@ def interactive_run(
     from config import config
     from model.run import run_model_batch
 
-    if configure_logging:
-        config.configureLogger()
     if load_host_config:
         config.processConfigurations(None, None, True)
+    if configure_logging:
+        config.configureLogger()
 
     mrp = build_interactive_mrp(
         analysis_ids,
