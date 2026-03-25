@@ -191,6 +191,14 @@ def interactive_run(
     from config import config
     from model.run import run_model_batch
 
+    ids_preview = [str(a) for a in analysis_ids if a is not None and str(a).strip() != ""]
+    _req_line = (
+        "[interactive_run] REQUEST analysisIds (n={}): {} — return shape will be "
+        "{{'quarterly_summary_report': dict, 'hanmi_acl_quarterly_report': dict|None}}"
+    ).format(len(ids_preview), ids_preview)
+    logger.info(_req_line)
+    print(_req_line, flush=True)
+
     if load_host_config:
         _apply_host_env_config(config)
     if configure_logging:
@@ -241,10 +249,25 @@ def interactive_run(
         if isinstance(hanmi, dict) and hanmi.get("_parseError"):
             hanmi = None
 
-        return {
+        out = {
             "quarterly_summary_report": quarterly,
             "hanmi_acl_quarterly_report": hanmi,
         }
+        n_q_sections = len((quarterly or {}).get("sections") or []) if isinstance(quarterly, dict) else 0
+        n_h_top = len(hanmi) if isinstance(hanmi, dict) else 0
+        _ret_line = (
+            "[interactive_run] RETURN ok top_level_keys={} quarterly_summary.sections={} "
+            "quarterly_summary.currentAnalysisId={!r} hanmi_acl is_dict={} hanmi_top_level_keys={}"
+        ).format(
+            list(out.keys()),
+            n_q_sections,
+            (quarterly or {}).get("currentAnalysisId") if isinstance(quarterly, dict) else None,
+            isinstance(hanmi, dict),
+            n_h_top,
+        )
+        logger.info(_ret_line)
+        print(_ret_line, flush=True)
+        return out
     finally:
         if not keep_temp and os.path.isdir(tmp):
             shutil.rmtree(tmp, ignore_errors=True)

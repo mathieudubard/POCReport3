@@ -11,7 +11,7 @@ if PACKAGE_DIRECTORY in sys.path:
     sys.path.remove(PACKAGE_DIRECTORY)
 sys.path.insert(0, PACKAGE_DIRECTORY)
 from config import config
-from model.cappy_log import cappy_echo_info, cappy_echo_warning
+from model.cappy_log import cappy_echo_info, cappy_echo_warning, milestone_banner
 
 
 def _cappy_auth_mode(creds):
@@ -41,6 +41,7 @@ def run_model_batch(args, return_model=False):
 
     jwt_for_cappy = args.jwt
     if jwt_for_cappy:
+        milestone_banner("decoding JWT")
         jwt_for_cappy = normalize_bearer_jwt(jwt_for_cappy)
         validate_compact_jwt_three_segments(jwt_for_cappy)
 

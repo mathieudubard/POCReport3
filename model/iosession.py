@@ -2,6 +2,8 @@ from glob import glob as gg
 import json
 import logging
 import os
+
+from .cappy_log import milestone_banner
 import pandas as pd
 import shutil
 import tempfile
@@ -632,6 +634,7 @@ class IOSession :
     def getSourceInputFiles(self) :
         print("[getSourceInputFiles] per_analysis_s3={}".format(self.model_run_parameters.use_per_analysis_s3_download()))
         if self.model_run_parameters.use_per_analysis_s3_download():
+            milestone_banner("downloading inputs from S3 (per analysis)")
             source_input_directory = self.local_directories.get('inputPaths')
             input_files = {}
             analysis_ids = self.model_run_parameters.settings.get('analysisIds', [])
@@ -653,6 +656,18 @@ class IOSession :
             n_result_parquet = n_reporting_parquet = n_reference_parquet = 0
             n_analysis_details_ok = n_analysis_details_missing = 0
             n_macro_parquet = 0
+            # Per-analysis parquet file counts (row counts come later in model build logs).
+            per_analysis = [
+                {
+                    "analysisId": str(aid),
+                    "instrumentResult_parquet": 0,
+                    "instrumentReporting_parquet": 0,
+                    "instrumentReference_parquet": 0,
+                    "macro_parquet": 0,
+                    "analysisDetails_ok": 0,
+                }
+                for aid in (analysis_ids or [])
+            ]
 
             base = self.OUTPUT_ROOT_BASE
             scenario = self.SCENARIO_SUMMARY_SEGMENT
@@ -665,7 +680,10 @@ class IOSession :
                 prefix = "{}/instrumentResult/analysisidentifier={}/{}/".format(base, aid, scenario)
                 keys = self._get_s3_object_keys(prefix)
                 parquet_keys = [k for k in keys if k.endswith(".parquet")]
-                n_result_parquet += len(parquet_keys)
+                nr = len(parquet_keys)
+                n_result_parquet += nr
+                if idx < len(per_analysis):
+                    per_analysis[idx]["instrumentResult_parquet"] = nr
                 if not parquet_keys:
                     self.logger.info(
                         "[Cappy/S3] instrumentResult: no .parquet under prefix=%s (listed_keys=%d)",
@@ -690,7 +708,10 @@ class IOSession :
                 prefix = "{}/instrumentReporting/analysisidentifier={}/".format(base, aid)
                 keys = self._get_s3_object_keys(prefix)
                 parquet_keys = [k for k in keys if k.endswith(".parquet")]
-                n_reporting_parquet += len(parquet_keys)
+                np_ = len(parquet_keys)
+                n_reporting_parquet += np_
+                if idx < len(per_analysis):
+                    per_analysis[idx]["instrumentReporting_parquet"] = np_
                 if not parquet_keys:
                     self.logger.info(
                         "[Cappy/S3] instrumentReporting: no .parquet under prefix=%s (listed_keys=%d)",
@@ -714,7 +735,10 @@ class IOSession :
                 prefix = "{}/instrumentReference/analysisidentifier={}/".format(base, aid)
                 keys = self._get_s3_object_keys(prefix)
                 parquet_keys = [k for k in keys if k.endswith(".parquet")]
-                n_reference_parquet += len(parquet_keys)
+                nref = len(parquet_keys)
+                n_reference_parquet += nref
+                if idx < len(per_analysis):
+                    per_analysis[idx]["instrumentReference_parquet"] = nref
                 if not parquet_keys:
                     self.logger.info(
                         "[Cappy/S3] instrumentReference: no .parquet under prefix=%s (listed_keys=%d)",
@@ -734,7 +758,7 @@ class IOSession :
             report_dir = self.local_directories.get("outputPaths", {}).get("report")
             if report_dir:
                 os.makedirs(report_dir, exist_ok=True)
-                for aid in (analysis_ids or []):
+                for ai, aid in enumerate(analysis_ids or []):
                     s3_key = "{}/analysisidentifier={}/analysisDetails.json".format(self.EXPORT_BASE, aid)
                     local_path = os.path.join(report_dir, "analysisDetails_{}.json".format(aid))
                     if self._tenant_s3_inputs_enabled():
@@ -743,6 +767,8 @@ class IOSession :
                         self._safeCopyFile(s3_key, local_path)
                     if os.path.isfile(local_path):
                         n_analysis_details_ok += 1
+                        if ai < len(per_analysis):
+                            per_analysis[ai]["analysisDetails_ok"] = 1
                     else:
                         n_analysis_details_missing += 1
                         self.logger.warning(
@@ -782,7 +808,10 @@ class IOSession :
                         keys = self._get_s3_object_keys(prefix)
                         parquet_keys = [k for k in keys if k.endswith(".parquet")]
                         if parquet_keys:
-                            n_macro_parquet += len(parquet_keys)
+                            nm = len(parquet_keys)
+                            n_macro_parquet += nm
+                            if idx < len(per_analysis):
+                                per_analysis[idx]["macro_parquet"] = nm
                             for s3_key in parquet_keys:
                                 local_path = os.path.join(local_dir, os.path.basename(s3_key))
                                 self._downloadFile(s3_key, local_path)
@@ -820,6 +849,16 @@ class IOSession :
             )
             self.logger.info(_s3_sum)
             print(_s3_sum)
+            for st in per_analysis:
+                line = (
+                    "[getSourceInputFiles] by_analysis analysisId={analysisId} "
+                    "instrumentResult_parquet={instrumentResult_parquet} "
+                    "instrumentReporting_parquet={instrumentReporting_parquet} "
+                    "instrumentReference_parquet={instrumentReference_parquet} "
+                    "macro_parquet={macro_parquet} analysisDetails_ok={analysisDetails_ok}"
+                ).format(**st)
+                self.logger.info(line)
+                print(line)
             print("[getSourceInputFiles] done: result, reporting, ref, analysisDetails (and macro if present) for {} analyses".format(n_analyses))
 
         else :

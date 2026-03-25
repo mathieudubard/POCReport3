@@ -25,3 +25,13 @@ def cappy_echo_error(logger: logging.Logger, fmt: str, *args: Any) -> None:
     text = fmt % args if args else fmt
     logger.error(text)
     print(text, flush=True)
+
+
+def milestone_banner(title: str) -> None:
+    """One-line stdout marker for major phases (Domino / plain logs). Keep usage sparse."""
+    label = (title or "").strip()
+    if not label:
+        return
+    print("", flush=True)
+    print("******* {} *******".format(label), flush=True)
+    print("", flush=True)

@@ -1,7 +1,7 @@
 from moodyscappy import Cappy
 import glob
 from . import iosession
-from .cappy_log import cappy_echo_info
+from .cappy_log import cappy_echo_info, milestone_banner
 import json
 import logging
 from json import JSONDecodeError
@@ -86,11 +86,20 @@ class Model:
         self.logger.info(f'Running model: {self.model_run_parameters.name}')
 
         print("[Model run] Step 1: List S3 folders")
-        self.io_session.list_and_print_s3_folders()
+        if self.model_run_parameters.use_per_analysis_s3_download():
+            # Placeholder inputPath (e.g. _library/input) has no objects; parquet lives at bucket-root output/.
+            self.io_session.list_and_print_s3_folders(
+                prefix=self.io_session.OUTPUT_ROOT_BASE + "/",
+                list_object_keys=False,
+            )
+        else:
+            self.io_session.list_and_print_s3_folders()
 
         print("[Model run] Step 2: Get source input files from S3")
         self.io_session.getSourceInputFiles()
+        print("[Model run] Step 2 done; Step 3+ hold full parquet data in memory (OOM/SIGKILL => increase worker RAM).")
 
+        milestone_banner("building reports (in-memory)")
         print("[Model run] Step 3: Build quarterly summary report (current/prior from analysisIds, all doc sections)")
         self.build_quarterly_summary_report()
 
@@ -1129,6 +1138,24 @@ class Model:
         reports = Model.collect_json_reports_from_directory(report_dir)
         self.report_response_payload = {"reports": reports}
         print("[Model run] report_response_payload: {} JSON file(s)".format(len(reports)))
+        if report_dir and os.path.isdir(report_dir):
+            for fname in sorted(reports.keys()):
+                fp = os.path.join(report_dir, fname)
+                if os.path.isfile(fp):
+                    print(
+                        "[Model run] report_response_payload file on disk: {} size_bytes={}".format(
+                            fname,
+                            os.path.getsize(fp),
+                        )
+                    )
+                err = reports[fname] if isinstance(reports.get(fname), dict) else None
+                if isinstance(err, dict) and err.get("_parseError"):
+                    print(
+                        "[Model run] report_response_payload parse error: {} -> {}".format(
+                            fname,
+                            err.get("_parseError"),
+                        )
+                    )
 
     @staticmethod
     def collect_json_reports_from_directory(report_dir):
