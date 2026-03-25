@@ -2,10 +2,14 @@ import argparse
 import logging
 import os
 import sys
-# Adding package directory necessary for some imports to work in local mode
+# Project root must be *first* on sys.path so ``import model`` resolves to the ``model/`` package, not
+# ``model/model.py`` (when the script dir is ``.../model``, a plain ``import model`` loads the wrong module).
 MODEL_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 PACKAGE_DIRECTORY = os.path.dirname(MODEL_DIRECTORY)
-sys.path.append(PACKAGE_DIRECTORY)
+# Ensure project root is index 0 so ``import model`` is the package, even if ``.../model`` is also on path.
+if PACKAGE_DIRECTORY in sys.path:
+    sys.path.remove(PACKAGE_DIRECTORY)
+sys.path.insert(0, PACKAGE_DIRECTORY)
 from config import config
 from model.cappy_log import cappy_echo_info, cappy_echo_warning
 

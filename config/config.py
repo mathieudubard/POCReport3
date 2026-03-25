@@ -3,8 +3,6 @@ import os
 import logging
 from logging.config import fileConfig
 
-from model.cappy_log import cappy_echo_error, cappy_echo_info
-
 
 CONFIG_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 LOGGING_CONFIGURATION_FILE = os.path.join(CONFIG_DIRECTORY, 'logging.ini')
@@ -18,6 +16,19 @@ FALLBACK_QA_MOODYS_SSO_URL = "https://qa-api.sso.moodysanalytics.net/sso-api/"
 _log = logging.getLogger(__name__)
 
 
+def _cappy_echo_info(fmt, *args):
+    """Log + print so bare runtimes see Cappy lines without tuning logging.ini (config must not import ``model``)."""
+    text = fmt % args if args else fmt
+    _log.info(text)
+    print(text, flush=True)
+
+
+def _cappy_echo_error(fmt, *args):
+    text = fmt % args if args else fmt
+    _log.error(text)
+    print(text, flush=True)
+
+
 def resolve_sso_url_for_cappy():
     """
     SSO base URL for Cappy JWT validation (``/auth/certs``). Matches config/local.ini when env is loaded.
@@ -26,9 +37,9 @@ def resolve_sso_url_for_cappy():
     for key in ("MOODYS_SSO_URL", "GLOBAL_SSO_API_SERVICE_URL"):
         v = (os.environ.get(key) or "").strip()
         if v:
-            _log.info("[Cappy] sso_url resolved from env %s=%r", key, v)
+            _cappy_echo_info("[Cappy] sso_url resolved from env %s=%r", key, v)
             return v
-    _log.info("[Cappy] sso_url using QA fallback (no MOODYS_SSO_URL / GLOBAL_SSO_API_SERVICE_URL)")
+    _cappy_echo_info("[Cappy] sso_url using QA fallback (no MOODYS_SSO_URL / GLOBAL_SSO_API_SERVICE_URL)")
     return FALLBACK_QA_MOODYS_SSO_URL
 
 
@@ -54,7 +65,7 @@ def resolve_tenant_url_for_cappy(jwt=None):
     env_url = (os.environ.get("MOODYS_TENANT_URL") or "").strip()
     if env_url:
         out = normalize_infra_base_url(env_url)
-        cappy_echo_info(_log, "[Cappy] tenant_url resolved from env MOODYS_TENANT_URL=%r", out)
+        _cappy_echo_info("[Cappy] tenant_url resolved from env MOODYS_TENANT_URL=%r", out)
         return out
 
     jwt_str = (jwt or "").strip()
@@ -63,10 +74,9 @@ def resolve_tenant_url_for_cappy(jwt=None):
         url, source = tenant_infra_url_from_claims_with_source(claims)
         if url:
             out = normalize_infra_base_url(url)
-            cappy_echo_info(_log, "[Cappy] tenant_url resolved from JWT: %s -> %r", source, out)
+            _cappy_echo_info("[Cappy] tenant_url resolved from JWT: %s -> %r", source, out)
             return out
-        cappy_echo_error(
-            _log,
+        _cappy_echo_error(
             "[Cappy] tenant_url could not be resolved (JWT present but no claim/iss mapping; source=%r)",
             source,
         )
@@ -76,7 +86,7 @@ def resolve_tenant_url_for_cappy(jwt=None):
             "or extend model/jwt_tenant.py TENANT_INFRA_URL_CLAIM_KEYS."
         )
 
-    cappy_echo_error(_log, "[Cappy] tenant_url could not be resolved (no MOODYS_TENANT_URL and no JWT)")
+    _cappy_echo_error("[Cappy] tenant_url could not be resolved (no MOODYS_TENANT_URL and no JWT)")
     raise ValueError(
         "MOODYS_TENANT_URL is unset and no JWT was provided; set MOODYS_TENANT_URL in the environment "
         "or use JWT auth so the tenant infra URL can be read from claims."
