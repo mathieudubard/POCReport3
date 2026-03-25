@@ -1,4 +1,5 @@
 from moodyscappy import Cappy
+import gc
 import glob
 from . import iosession
 from .cappy_log import cappy_echo_info, milestone_banner
@@ -43,6 +44,73 @@ SEGMENT_DIMENSION_CANDIDATES = [
     ("locationType", "locationtype", "Location Type", "location_type"),
     ("instrumentType", "instrumenttype", "Instrument Type", "instrument_type"),
 ]
+
+
+def _parquet_col_key(name):
+    """Normalize parquet field name for allowlist matching (case, spaces, underscores)."""
+    return re.sub(r"[\s_]", "", str(name)).lower()
+
+
+def _parquet_wanted_normalized(names):
+    return frozenset(_parquet_col_key(n) for n in names)
+
+
+def _instrument_reference_parquet_wanted_normalized():
+    """Columns the Hanmi / quarterly reports may read from instrumentReference (see docs/DATAMODEL_COLUMNS.md)."""
+    wanted = set(
+        _parquet_wanted_normalized(
+            [
+                "instrumentIdentifier",
+                "analysisIdentifier",
+                "ascImpairmentEvaluation",
+                "lossRateModelName",
+                "pdModelName",
+                "lgdModelName",
+            ]
+        )
+    )
+    for tup in SEGMENT_DIMENSION_CANDIDATES:
+        for part in tup:
+            wanted.add(_parquet_col_key(part))
+    return frozenset(wanted)
+
+
+# Normalized keys -> intersect with each file's schema so we do not load thousands of unused Impairment Studio columns.
+REPORT_PARQUET_COLS_NORMALIZED = {
+    "instrumentResult": _parquet_wanted_normalized(
+        [
+            "instrumentIdentifier",
+            "scenarioIdentifier",
+            "analysisIdentifier",
+            "onBalanceSheetReserve",
+            "offBalanceSheetReserve",
+            "onBalanceSheetReserveAdjusted",
+            "onBalanceSheetReserveUnadjusted",
+            "amortizedCost",
+            "offBalanceSheetEADAmountLifetime",
+            "allowanceProvisionDelta",
+        ]
+    ),
+    "instrumentReporting": _parquet_wanted_normalized(
+        [
+            "instrumentIdentifier",
+            "portfolioIdentifier",
+            "netChargeOffAmount",
+            "grossChargeOffAmount",
+            "recoveryAmount",
+            "allowanceProvision",
+        ]
+    ),
+    "instrumentReference": _instrument_reference_parquet_wanted_normalized(),
+    "macroEconomicVariableInput": _parquet_wanted_normalized(
+        [
+            "macroeconomicVariableName",
+            "valueDate",
+            "macroeconomicVariableValue",
+        ]
+    ),
+}
+
 
 class Model:
     """
@@ -493,6 +561,37 @@ class Model:
             return []
         return [(aid, self._get_quarter_label(report_dir, aid)) for aid in ids]
 
+    def _parquet_columns_to_read(self, file_path, category):
+        """
+        Return (columns, schema_col_count) for read_parquet(columns=...), or (None, count_or_None) to read all.
+        Pruning avoids OOM when instrument parquets carry tens of thousands of schema columns.
+        """
+        try:
+            import pyarrow.parquet as pq
+        except ImportError:
+            self.logger.warning("pyarrow unavailable; cannot prune parquet columns for %s", category)
+            return None, None
+        try:
+            schema = pq.read_schema(file_path)
+        except Exception as e:
+            self.logger.debug("read_schema failed for %s: %s", file_path, e)
+            return None, None
+        n_all = len(schema.names)
+        wanted = REPORT_PARQUET_COLS_NORMALIZED.get(category)
+        if not wanted:
+            return None, n_all
+        names = list(schema.names)
+        selected = [n for n in names if _parquet_col_key(n) in wanted]
+        if not selected:
+            self.logger.warning(
+                "Parquet prune: 0 column overlap for %s file=%s (file has %d cols); reading full file",
+                category,
+                os.path.basename(file_path),
+                n_all,
+            )
+            return None, n_all
+        return selected, n_all
+
     def _load_parquet_for_analysis(self, category, analysis_id, filter_summary=False):
         """Load all parquet under that category dir for one analysis_id. If filter_summary, filter to scenarioIdentifier=Summary."""
         io = self.io_session
@@ -512,13 +611,34 @@ class Model:
             print("[_load_parquet] no parquet in {} (category={}, analysisId={})".format(load_dir, category, analysis_id))
             return None
         dfs = []
+        pruned_files = 0
+        total_schema_cols = 0
+        total_read_cols = 0
         for f in files:
             try:
-                dfs.append(pd.read_parquet(f))
+                cols, n_schema = self._parquet_columns_to_read(f, category)
+                if cols is not None and n_schema is not None and len(cols) < n_schema:
+                    pruned_files += 1
+                    total_schema_cols += n_schema
+                    total_read_cols += len(cols)
+                df_part = pd.read_parquet(f, columns=cols) if cols is not None else pd.read_parquet(f)
+                dfs.append(df_part)
             except Exception as e:
                 self.logger.warning("Failed to read %s: %s", f, e)
         if not dfs:
             return None
+        if pruned_files:
+            print(
+                "[_load_parquet] column_prune category={} analysisId={} files_pruned={}/{} "
+                "approx_schema_cols={} cols_read={}".format(
+                    category,
+                    analysis_id,
+                    pruned_files,
+                    len(files),
+                    total_schema_cols,
+                    total_read_cols,
+                )
+            )
         out = pd.concat(dfs, ignore_index=True)
         if filter_summary:
             out = self._filter_summary_scenario(out)
@@ -606,11 +726,19 @@ class Model:
         df_reporting_current = self._load_parquet_for_analysis("instrumentReporting", current_id)
         df_ref_current = self._load_parquet_for_analysis("instrumentReference", current_id)
         df_ref_prior = self._load_parquet_for_analysis("instrumentReference", prior_id) if prior_id else None
-        print("[quarterly_summary] roles current={}, prior={}, priorYear={}; data result({},{}) reporting ref({},{})".format(
-            current_id, prior_id, prior_year_id,
-            len(df_current) if df_current is not None else 0, len(df_prior) if df_prior is not None else 0,
-            len(df_reporting_current) if df_reporting_current is not None else 0,
-            len(df_ref_current) if df_ref_current is not None else 0, len(df_ref_prior) if df_ref_prior is not None else 0))
+        print(
+            "[quarterly_summary] roles current={}, prior={}, priorYear={}; "
+            "rows result_current={} result_prior={} reporting_current={} ref_current={} ref_prior={}".format(
+                current_id,
+                prior_id,
+                prior_year_id,
+                len(df_current) if df_current is not None else 0,
+                len(df_prior) if df_prior is not None else 0,
+                len(df_reporting_current) if df_reporting_current is not None else 0,
+                len(df_ref_current) if df_ref_current is not None else 0,
+                len(df_ref_prior) if df_ref_prior is not None else 0,
+            )
+        )
 
         # --- Section 1: Changes to ACL (report contract: beginningACL, chargeOffs, recoveries, provision, endingACL)
         prior_reserves = self._safe_sum(df_prior, "onBalanceSheetReserve") + self._safe_sum(df_prior, "offBalanceSheetReserve") if df_prior is not None else 0.0
@@ -721,6 +849,7 @@ class Model:
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(out, f, indent=2)
         print("[quarterly_summary] Wrote structured report -> {} (sections: 6)".format(out_path))
+        gc.collect()
 
     def build_hanmi_acl_quarterly_report(self):
         """
@@ -1053,6 +1182,9 @@ class Model:
         Build a debug JSON: ref-centered left join with result and reporting (same analysisId),
         group by key dimensions, aggregate key metrics. Written to report_dir/debug_all_data_summary.json.
         """
+        if self._is_library_mode():
+            print("[debug_all_data] skipped (libraryMode — saves memory on API/interactive runs)")
+            return
         if not report_dir or not analysis_ids:
             return
         join_keys_used = []
