@@ -120,6 +120,13 @@ class IOSession :
         else :
             self.input_path = self.model_run_parameters.input_s3_path
 
+    def _tenant_s3_inputs_enabled(self):
+        """
+        Use Cappy/S3 for bucket-root paths (output/, export/, input/) even when the MRP JSON is loaded
+        from a local path (library/interactive: local_mode True + liveS3InputsByAnalysisId).
+        """
+        return (not self.local_mode) or self.model_run_parameters.use_per_analysis_s3_download()
+
     def create_io_directories(self) :
         """Create local directories for every input/output/log directory in modelRunParameter.json settings"""
         local_directories = {'inputPath' : {}}
@@ -184,10 +191,10 @@ class IOSession :
         List and print what Cappy finds under the S3 bucket for the given prefix:
         - 'folders' (common prefixes when using Delimiter='/')
         - optionally all object keys under the prefix.
-        Only runs when not in local_mode. Uses cap_session.init_s3_client().
+        Only skipped when local_mode and not using per-analysis live S3. Uses cap_session.init_s3_client().
         """
-        if self.local_mode:
-            self.logger.info("S3 list skipped (local mode).")
+        if not self._tenant_s3_inputs_enabled():
+            self.logger.info("S3 list skipped (local mode, no live S3 by analysis id).")
             return
         bucket = self.cap_session.context.get('s3_bucket')
         if not bucket:
@@ -233,7 +240,7 @@ class IOSession :
         List and print folders (CommonPrefixes) and object keys at the given S3 prefix.
         Used for progressive S3 diagnostics. Returns True if list succeeded, False on error.
         """
-        if self.local_mode:
+        if not self._tenant_s3_inputs_enabled():
             return False
         bucket = self.cap_session.context.get('s3_bucket')
         if not bucket:
@@ -269,10 +276,11 @@ class IOSession :
 
     def _get_s3_object_keys(self, prefix):
         """Return list of object keys (files) under the given prefix. Uses pagination."""
-        if self.local_mode:
+        if not self._tenant_s3_inputs_enabled():
             return []
         bucket = self.cap_session.context.get('s3_bucket')
         if not bucket:
+            self.logger.warning("[Cappy/S3] list_objects skipped: no s3_bucket in cap_session.context")
             return []
         keys = []
         try:
@@ -284,7 +292,13 @@ class IOSession :
                     if k:
                         keys.append(k)
         except Exception as e:
-            self.logger.debug(f"List objects at {prefix}: {e}")
+            self.logger.warning(
+                "[Cappy/S3] list_objects_v2 failed bucket=%s prefix=%s: %s",
+                bucket,
+                prefix,
+                e,
+                exc_info=self.logger.isEnabledFor(logging.DEBUG),
+            )
         return keys
 
     def _list_s3_under_prefix_recursive(self, prefix, max_depth=5, _current_depth=0, _folders=None, _objects=None):
@@ -292,7 +306,7 @@ class IOSession :
         Recursively list all folders (common prefixes) and object keys under prefix.
         Respects max_depth to avoid runaway. Returns (list of folder prefixes, list of object keys).
         """
-        if self.local_mode:
+        if not self._tenant_s3_inputs_enabled():
             return [], []
         bucket = self.cap_session.context.get('s3_bucket')
         if not bucket:
@@ -326,7 +340,7 @@ class IOSession :
         List recursively under execution_base (e.g. ...-report/), collect all folders and objects,
         then print a single summary at the end. Use trailing slash on execution_base.
         """
-        if self.local_mode or not execution_base:
+        if not self._tenant_s3_inputs_enabled() or not execution_base:
             return
         base = execution_base.rstrip('/') + '/'
         print("\n[S3 recursive] Walking tree under execution (max_depth={})...".format(max_depth))
@@ -352,11 +366,16 @@ class IOSession :
         file_name = os.path.splitext(os.path.basename(local_file_path))[0]
         try :
             self.cap_session.s3_download_file(download_key, local_file_path)
-            self.logger.info(f'Successfully downloaded {download_key} to {local_file_path}')
+            self.logger.debug("[Cappy/S3] downloaded key=%s -> %s", download_key, local_file_path)
             return {file_name : local_file_path}
         except Exception as e :
-            self.logger.error(f'Error downloading {download_key} to {local_file_path}')
-            self.logger.debug(e, exc_info=True)
+            self.logger.error(
+                "[Cappy/S3] download failed key=%s -> %s: %s",
+                download_key,
+                local_file_path,
+                e,
+                exc_info=self.logger.isEnabledFor(logging.DEBUG),
+            )
             if raise_on_error :
                 raise
             else :
@@ -619,6 +638,22 @@ class IOSession :
             n_analyses = len(analysis_ids or [])
             print("[getSourceInputFiles] analysisIds count={}".format(n_analyses))
 
+            bucket = self.cap_session.context.get("s3_bucket")
+            _s3_probe = (
+                "[getSourceInputFiles][Cappy/S3] bucket={!r} tenant_s3={} local_mode={} temp_dir={}"
+            ).format(
+                bucket,
+                self._tenant_s3_inputs_enabled(),
+                self.local_mode,
+                self.local_temp_directory,
+            )
+            self.logger.info(_s3_probe)
+            print(_s3_probe)
+
+            n_result_parquet = n_reporting_parquet = n_reference_parquet = 0
+            n_analysis_details_ok = n_analysis_details_missing = 0
+            n_macro_parquet = 0
+
             base = self.OUTPUT_ROOT_BASE
             scenario = self.SCENARIO_SUMMARY_SEGMENT
             instrument_result_paths = source_input_directory.get("instrumentResult") or []
@@ -630,12 +665,19 @@ class IOSession :
                 prefix = "{}/instrumentResult/analysisidentifier={}/{}/".format(base, aid, scenario)
                 keys = self._get_s3_object_keys(prefix)
                 parquet_keys = [k for k in keys if k.endswith(".parquet")]
+                n_result_parquet += len(parquet_keys)
+                if not parquet_keys:
+                    self.logger.info(
+                        "[Cappy/S3] instrumentResult: no .parquet under prefix=%s (listed_keys=%d)",
+                        prefix,
+                        len(keys),
+                    )
                 for s3_key in parquet_keys:
                     local_path = os.path.join(local_dir, os.path.basename(s3_key))
-                    if self.local_mode:
-                        self._safeCopyFile(s3_key, local_path)
-                    else:
+                    if self._tenant_s3_inputs_enabled():
                         self._downloadFile(s3_key, local_path)
+                    else:
+                        self._safeCopyFile(s3_key, local_path)
                     input_files.update({os.path.splitext(os.path.basename(s3_key))[0]: local_path})
 
             # Download instrumentReporting: output/instrumentReporting/analysisidentifier={id}/ (parquet files directly under, no extra partition)
@@ -648,12 +690,19 @@ class IOSession :
                 prefix = "{}/instrumentReporting/analysisidentifier={}/".format(base, aid)
                 keys = self._get_s3_object_keys(prefix)
                 parquet_keys = [k for k in keys if k.endswith(".parquet")]
+                n_reporting_parquet += len(parquet_keys)
+                if not parquet_keys:
+                    self.logger.info(
+                        "[Cappy/S3] instrumentReporting: no .parquet under prefix=%s (listed_keys=%d)",
+                        prefix,
+                        len(keys),
+                    )
                 for s3_key in parquet_keys:
                     local_path = os.path.join(local_dir, os.path.basename(s3_key))
-                    if self.local_mode:
-                        self._safeCopyFile(s3_key, local_path)
-                    else:
+                    if self._tenant_s3_inputs_enabled():
                         self._downloadFile(s3_key, local_path)
+                    else:
+                        self._safeCopyFile(s3_key, local_path)
 
             # Download instrumentReference: output/instrumentReference/analysisidentifier={id}/ (partitioned by portfolioidentifier=.../; get all parquet from all subfolders)
             instrument_reference_paths = source_input_directory.get("instrumentReference") or []
@@ -665,15 +714,22 @@ class IOSession :
                 prefix = "{}/instrumentReference/analysisidentifier={}/".format(base, aid)
                 keys = self._get_s3_object_keys(prefix)
                 parquet_keys = [k for k in keys if k.endswith(".parquet")]
+                n_reference_parquet += len(parquet_keys)
+                if not parquet_keys:
+                    self.logger.info(
+                        "[Cappy/S3] instrumentReference: no .parquet under prefix=%s (listed_keys=%d)",
+                        prefix,
+                        len(keys),
+                    )
                 for s3_key in parquet_keys:
                     # Preserve subpath under analysisidentifier={id}/ to avoid overwriting (e.g. portfolioidentifier=CRE/part-*.parquet)
                     rel = s3_key[len(prefix):] if s3_key.startswith(prefix) else os.path.basename(s3_key)
                     local_path = os.path.join(local_dir, rel.replace("/", os.sep))
                     os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                    if self.local_mode:
-                        self._safeCopyFile(s3_key, local_path)
-                    else:
+                    if self._tenant_s3_inputs_enabled():
                         self._downloadFile(s3_key, local_path)
+                    else:
+                        self._safeCopyFile(s3_key, local_path)
 
             report_dir = self.local_directories.get("outputPaths", {}).get("report")
             if report_dir:
@@ -681,10 +737,19 @@ class IOSession :
                 for aid in (analysis_ids or []):
                     s3_key = "{}/analysisidentifier={}/analysisDetails.json".format(self.EXPORT_BASE, aid)
                     local_path = os.path.join(report_dir, "analysisDetails_{}.json".format(aid))
-                    if self.local_mode:
-                        self._safeCopyFile(s3_key, local_path)
-                    else:
+                    if self._tenant_s3_inputs_enabled():
                         self._downloadFile(s3_key, local_path)
+                    else:
+                        self._safeCopyFile(s3_key, local_path)
+                    if os.path.isfile(local_path):
+                        n_analysis_details_ok += 1
+                    else:
+                        n_analysis_details_missing += 1
+                        self.logger.warning(
+                            "[Cappy/S3] analysisDetails missing after fetch: %s (local=%s)",
+                            s3_key,
+                            local_path,
+                        )
 
             # Download macroEconomicVariableInput from input root: path uses asofdate from analysisDetails (main analysis) and scenarioidentifier=BASE
             macro_paths = source_input_directory.get("macroEconomicVariableInput") or []
@@ -699,7 +764,7 @@ class IOSession :
                     break
                 local_dir = macro_paths[idx]
                 os.makedirs(local_dir, exist_ok=True)
-                if not self.local_mode:
+                if self._tenant_s3_inputs_enabled():
                     # Path: input/macroeconomicVariableInput/asofdate=YYYY-MM-DD/scenarioidentifier=BASE/
                     cat_folder = "macroeconomicVariableInput"
                     try_date_used = scenario_asof_date
@@ -717,6 +782,7 @@ class IOSession :
                         keys = self._get_s3_object_keys(prefix)
                         parquet_keys = [k for k in keys if k.endswith(".parquet")]
                         if parquet_keys:
+                            n_macro_parquet += len(parquet_keys)
                             for s3_key in parquet_keys:
                                 local_path = os.path.join(local_dir, os.path.basename(s3_key))
                                 self._downloadFile(s3_key, local_path)
@@ -741,6 +807,19 @@ class IOSession :
                     else :
                         file = self._downloadFile(rem_file_path, loc_file_path)
 
+            _s3_sum = (
+                "[getSourceInputFiles][Cappy/S3] summary: instrumentResult_parquet={} instrumentReporting_parquet={} "
+                "instrumentReference_parquet={} analysisDetails_ok={} analysisDetails_missing={} macro_parquet={}"
+            ).format(
+                n_result_parquet,
+                n_reporting_parquet,
+                n_reference_parquet,
+                n_analysis_details_ok,
+                n_analysis_details_missing,
+                n_macro_parquet,
+            )
+            self.logger.info(_s3_sum)
+            print(_s3_sum)
             print("[getSourceInputFiles] done: result, reporting, ref, analysisDetails (and macro if present) for {} analyses".format(n_analyses))
 
         else :
