@@ -30,7 +30,67 @@ if _REPO_ROOT not in sys.path:
 
 logger = logging.getLogger(__name__)
 
+# Same QA base as config/local.ini — only applied when nothing else set MOODYS_SSO_URL (see _apply_host_env_config).
+_FALLBACK_QA_MOODYS_SSO_URL = "https://qa-api.sso.moodysanalytics.net/sso-api/"
+
 AnalysisId = Union[str, int]
+
+
+def _apply_host_env_config(config_module) -> None:
+    """
+    Load ``config/local.ini`` into ``os.environ`` using a path **anchored to this repo** (next to ``model/``).
+
+    On some hosts (e.g. Domino), ``import config`` can resolve to a different package than this project, so
+    ``config.config.ENV_CONFIGURATION_FILE`` may not point at our ``local.ini`` — Cappy then sees no ``MOODYS_SSO_URL``
+    and fails with ``None/auth/certs``.
+
+    Also mirrors ``GLOBAL_SSO_API_SERVICE_URL`` → ``MOODYS_SSO_URL`` when the platform sets the former only.
+
+    If still unset, sets ``MOODYS_SSO_URL`` to the QA default (``_FALLBACK_QA_MOODYS_SSO_URL``) and logs **CRITICAL**
+    lines plus ``print`` so operators see last-resort behavior in Domino logs.
+    """
+    explicit_ini = os.path.join(_REPO_ROOT, "config", "local.ini")
+    if os.path.isfile(explicit_ini):
+        config_module.processConfigurations(
+            optional_config=explicit_ini, optional_additions=None, overwrite_existing=True
+        )
+        logger.info("Loaded host env from %s", explicit_ini)
+    else:
+        config_module.processConfigurations(None, None, True)
+        logger.info("Loaded host env via config package default path (no file at %s)", explicit_ini)
+
+    # moodyscappy expects MOODYS_SSO_URL; platforms often inject GLOBAL_SSO_API_SERVICE_URL only (see runner/config.py).
+    if not (os.environ.get("MOODYS_SSO_URL") or "").strip() and (
+        os.environ.get("GLOBAL_SSO_API_SERVICE_URL") or ""
+    ).strip():
+        os.environ["MOODYS_SSO_URL"] = os.environ["GLOBAL_SSO_API_SERVICE_URL"].strip()
+        logger.info("Set MOODYS_SSO_URL from GLOBAL_SSO_API_SERVICE_URL")
+
+    if not (os.environ.get("MOODYS_SSO_URL") or "").strip():
+        os.environ["MOODYS_SSO_URL"] = _FALLBACK_QA_MOODYS_SSO_URL
+        _log_last_resort_qa_sso_fallback()
+
+
+def _log_last_resort_qa_sso_fallback() -> None:
+    """Loud diagnostics when QA SSO URL is applied because no other source set MOODYS_SSO_URL."""
+    banner = "=" * 76
+    lines = [
+        banner,
+        "LAST-RESORT FALLBACK: MOODYS_SSO_URL was unset after config + GLOBAL_SSO mirror.",
+        "Cappy will use QA SSO base (same as config/local.ini default):",
+        "  " + _FALLBACK_QA_MOODYS_SSO_URL,
+        "This is NOT appropriate for production unless you intend QA SSO.",
+        "Set MOODYS_SSO_URL or GLOBAL_SSO_API_SERVICE_URL in the environment, or ship config/local.ini.",
+        banner,
+    ]
+    for line in lines:
+        logger.critical(line)
+    logger.warning(
+        "MOODYS_SSO_URL=%s (QA last-resort fallback). See CRITICAL lines above.",
+        os.environ.get("MOODYS_SSO_URL"),
+    )
+    # Domino / WSGI often surface print reliably
+    print("\n".join(["[interactive_run] " + ln for ln in lines]), flush=True)
 
 
 def build_interactive_mrp(
@@ -122,7 +182,7 @@ def interactive_run(
     from model.run import run_model_batch
 
     if load_host_config:
-        config.processConfigurations(None, None, True)
+        _apply_host_env_config(config)
     if configure_logging:
         config.configureLogger()
 
