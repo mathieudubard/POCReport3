@@ -1,6 +1,7 @@
 from moodyscappy import Cappy
 import glob
 from . import iosession
+from .cappy_log import cappy_echo_info
 import json
 import logging
 from json import JSONDecodeError
@@ -56,10 +57,22 @@ class Model:
         # Create module's logger and session managers
         self.logger = logging.getLogger(__name__)
         self.logger.info(f'Running in local mode: {local_mode}')
+        cappy_echo_info(
+            self.logger,
+            "[Cappy] Model: creating main session sso_url=%r tenant_url=%r",
+            credentials.get("sso_url"),
+            credentials.get("tenant_url"),
+        )
         self.cap_session = Cappy(**credentials)
         self.io_session = iosession.IOSession(self.cap_session, model_run_parameters_path, local_mode, credentials)
         self.model_run_parameters = self.io_session.model_run_parameters
         if proxy_credentials:
+            cappy_echo_info(
+                self.logger,
+                "[Cappy] Model: creating proxy session sso_url=%r tenant_url=%r",
+                proxy_credentials.get("sso_url"),
+                proxy_credentials.get("tenant_url"),
+            )
             self.proxy_cap_session = Cappy(**proxy_credentials, errors='log')
         # When settings.returnReportsInResponse is true, run() sets this to {"reports": {filename: object, ...}} for API responses.
         self.report_response_payload = None

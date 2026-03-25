@@ -7,6 +7,17 @@ MODEL_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 PACKAGE_DIRECTORY = os.path.dirname(MODEL_DIRECTORY)
 sys.path.append(PACKAGE_DIRECTORY)
 from config import config
+from model.cappy_log import cappy_echo_info, cappy_echo_warning
+
+
+def _cappy_auth_mode(creds):
+    if not creds:
+        return "none"
+    if creds.get("jwt"):
+        return "jwt"
+    if creds.get("username") is not None:
+        return "username_password"
+    return "unknown"
 
 
 def run_model_batch(args, return_model=False):
@@ -25,13 +36,42 @@ def run_model_batch(args, return_model=False):
         'jwt': args.jwt,
         'username': args.unpw[0],
         'password': args.unpw[1],
-        # Cappy reads ``sso_url`` from kwargs; env alone is not always applied (e.g. some Domino runtimes).
+        # Cappy reads these from kwargs; env alone is not always applied (e.g. some Domino runtimes).
         'sso_url': config.resolve_sso_url_for_cappy(),
+        'tenant_url': config.resolve_tenant_url_for_cappy(jwt=args.jwt),
     }
     if not args.proxyjwt and args.proxyunpw == [None, None]:
         proxy_credentials = {}
     else:
-        proxy_credentials = {'jwt': args.proxyjwt, 'username': args.proxyunpw[0], 'password': args.proxyunpw[1], 'sso_url': os.environ.get('PROXY_TOKEN_URL')}
+        proxy_credentials = {
+            'jwt': args.proxyjwt,
+            'username': args.proxyunpw[0],
+            'password': args.proxyunpw[1],
+            'sso_url': os.environ.get('PROXY_TOKEN_URL'),
+            'tenant_url': config.resolve_tenant_url_for_cappy(jwt=args.proxyjwt),
+        }
+        if not (proxy_credentials.get("sso_url") or "").strip():
+            cappy_echo_warning(
+                logger,
+                "[Cappy] proxy sso_url is unset (PROXY_TOKEN_URL empty); Cappy may fail proxy auth",
+            )
+
+    cappy_echo_info(
+        logger,
+        "[Cappy] credentials built for batch: main auth=%s sso_url=%r tenant_url=%r",
+        _cappy_auth_mode(credentials),
+        credentials.get("sso_url"),
+        credentials.get("tenant_url"),
+    )
+    if proxy_credentials:
+        cappy_echo_info(
+            logger,
+            "[Cappy] credentials built for batch: proxy auth=%s sso_url=%r tenant_url=%r",
+            _cappy_auth_mode(proxy_credentials),
+            proxy_credentials.get("sso_url"),
+            proxy_credentials.get("tenant_url"),
+        )
+
     model = None
     try:
         from model import Model

@@ -39,7 +39,8 @@ def _apply_host_env_config(config_module) -> None:
 
     On some hosts (e.g. Domino), ``import config`` can resolve to a different package than this project, so
     ``config.config.ENV_CONFIGURATION_FILE`` may not point at our ``local.ini`` — Cappy then sees no ``MOODYS_SSO_URL``
-    and fails with ``None/auth/certs``.
+    and fails with ``None/auth/certs``. Tenant infra URL is resolved per run from JWT claims or ``MOODYS_TENANT_URL``
+    (see ``model/jwt_tenant.py``); it is not a single fixed QA endpoint.
 
     Also mirrors ``GLOBAL_SSO_API_SERVICE_URL`` → ``MOODYS_SSO_URL`` when the platform sets the former only.
 
@@ -69,6 +70,8 @@ def _apply_host_env_config(config_module) -> None:
         os.environ["MOODYS_SSO_URL"] = project_config.resolve_sso_url_for_cappy()
         if os.environ["MOODYS_SSO_URL"] == project_config.FALLBACK_QA_MOODYS_SSO_URL:
             _log_last_resort_qa_sso_fallback(project_config.FALLBACK_QA_MOODYS_SSO_URL)
+
+    # Tenant infra URL is per-tenant (JWT claims) or MOODYS_TENANT_URL — not auto-filled here; see run_model_batch.
 
 
 def _log_last_resort_qa_sso_fallback(url: str) -> None:
