@@ -71,7 +71,8 @@ def _apply_host_env_config(config_module) -> None:
         if os.environ["MOODYS_SSO_URL"] == project_config.FALLBACK_QA_MOODYS_SSO_URL:
             _log_last_resort_qa_sso_fallback(project_config.FALLBACK_QA_MOODYS_SSO_URL)
 
-    # Tenant infra URL is per-tenant (JWT claims) or MOODYS_TENANT_URL — not auto-filled here; see run_model_batch.
+    # Do not set MOODYS_TENANT_URL here: that would run before run_model_batch and skip JWT/iss resolution.
+    # QA tenant backstop is in config.resolve_tenant_url_for_cappy() after env + JWT.
 
 
 def _log_last_resort_qa_sso_fallback(url: str) -> None:

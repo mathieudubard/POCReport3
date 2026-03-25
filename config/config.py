@@ -12,6 +12,8 @@ LOG_FILE = os.path.join(os.path.dirname(CONFIG_DIRECTORY), 'model' , 'log.log') 
 # moodyscappy Cappy: pass URLs in credentials (see model/run.py); env alone is unreliable on some hosts (e.g. Domino).
 # Cappy is proprietary — names inferred from repo local.ini and runtime errors (None/auth/certs, None/resources).
 FALLBACK_QA_MOODYS_SSO_URL = "https://qa-api.sso.moodysanalytics.net/sso-api/"
+# Same QA Rafa infra base as config/local.ini [DEFAULT] / model-conf-qa.ini (not the S3 bucket name).
+FALLBACK_QA_MOODYS_TENANT_URL = "https://qa-api.rafa.moodysanalytics.net/infra/1.0/"
 
 _log = logging.getLogger(__name__)
 
@@ -45,16 +47,15 @@ def resolve_sso_url_for_cappy():
 
 def resolve_tenant_url_for_cappy(jwt=None):
     """
-    Tenant / infra API base for Cappy (per-tenant Rafa ``.../infra/...``; used for tenant lookup).
+    Tenant / infra API base for Cappy (Rafa ``.../infra/...``; used for tenant lookup inside moodyscappy).
 
-    Resolution order:
+    Waterfall (mirrors :func:`resolve_sso_url_for_cappy` style):
 
-    1. ``MOODYS_TENANT_URL`` environment variable (non-empty) — batch / operator override (see ``config/local.ini``).
-    2. Else if ``jwt`` is provided: unverified decode and read claim(s) — see ``model/jwt_tenant.py``
-       (``MOODYS_TENANT_URL_CLAIM_KEY`` to pin the claim name or dotted path).
-    3. Username/password auth with no env: raises ``ValueError`` (set ``MOODYS_TENANT_URL`` in config).
+    1. ``MOODYS_TENANT_URL``, then ``GLOBAL_TENANT_INFRA_URL`` if platforms inject the latter only.
+    2. Else JWT: claims / ``iss`` host map — see ``model/jwt_tenant.py``.
+    3. Else QA backstop: ``FALLBACK_QA_MOODYS_TENANT_URL`` (same as ``config/local.ini`` QA infra base).
 
-    There is **no** fixed QA tenant URL fallback: the infra base is per tenant (JWT) or explicit env.
+    The backstop is **not** the S3 bucket; it is the Rafa infra API root. Set ``MOODYS_TENANT_URL`` for non-QA.
     """
     from model.jwt_tenant import (
         decode_jwt_payload_unverified,
@@ -62,11 +63,12 @@ def resolve_tenant_url_for_cappy(jwt=None):
         tenant_infra_url_from_claims_with_source,
     )
 
-    env_url = (os.environ.get("MOODYS_TENANT_URL") or "").strip()
-    if env_url:
-        out = normalize_infra_base_url(env_url)
-        _cappy_echo_info("[Cappy] tenant_url resolved from env MOODYS_TENANT_URL=%r", out)
-        return out
+    for key in ("MOODYS_TENANT_URL", "GLOBAL_TENANT_INFRA_URL"):
+        v = (os.environ.get(key) or "").strip()
+        if v:
+            out = normalize_infra_base_url(v)
+            _cappy_echo_info("[Cappy] tenant_url resolved from env %s=%r", key, out)
+            return out
 
     jwt_str = (jwt or "").strip()
     if jwt_str:
@@ -76,21 +78,21 @@ def resolve_tenant_url_for_cappy(jwt=None):
             out = normalize_infra_base_url(url)
             _cappy_echo_info("[Cappy] tenant_url resolved from JWT: %s -> %r", source, out)
             return out
-        _cappy_echo_error(
-            "[Cappy] tenant_url could not be resolved (JWT present but no claim/iss mapping; source=%r)",
+        out = normalize_infra_base_url(FALLBACK_QA_MOODYS_TENANT_URL)
+        _cappy_echo_info(
+            "[Cappy] tenant_url using QA fallback (JWT present but no claim/iss mapping; source=%r) -> %r. "
+            "Set MOODYS_TENANT_URL or extend model/jwt_tenant.py issuer map.",
             source,
+            out,
         )
-        raise ValueError(
-            "MOODYS_TENANT_URL is unset and no tenant infra URL was found in JWT claims. "
-            "Set MOODYS_TENANT_URL, or set MOODYS_TENANT_URL_CLAIM_KEY to the claim your token uses, "
-            "or extend model/jwt_tenant.py TENANT_INFRA_URL_CLAIM_KEYS."
-        )
+        return out
 
-    _cappy_echo_error("[Cappy] tenant_url could not be resolved (no MOODYS_TENANT_URL and no JWT)")
-    raise ValueError(
-        "MOODYS_TENANT_URL is unset and no JWT was provided; set MOODYS_TENANT_URL in the environment "
-        "or use JWT auth so the tenant infra URL can be read from claims."
+    out = normalize_infra_base_url(FALLBACK_QA_MOODYS_TENANT_URL)
+    _cappy_echo_info(
+        "[Cappy] tenant_url using QA fallback (no MOODYS_TENANT_URL / GLOBAL_TENANT_INFRA_URL and no JWT) -> %r",
+        out,
     )
+    return out
 
 
 DO_NOT_LOG_MODULES = ['matplotlib', 's3transfer.utils', 's3transfer.futures', 's3transfer.tasks']  # Put noisy module names here if they are unneccessarily cluttering the logs

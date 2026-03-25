@@ -65,7 +65,10 @@ class TestJwtTenant(unittest.TestCase):
     def test_resolve_tenant_url_for_cappy_env_wins(self):
         from config import config
 
-        with patch.dict(os.environ, {"MOODYS_TENANT_URL": "https://env-only.example/infra/1.0/"}):
+        with patch.dict(
+            os.environ,
+            {"MOODYS_TENANT_URL": "https://env-only.example/infra/1.0/", "GLOBAL_TENANT_INFRA_URL": ""},
+        ):
             jwt_tok = _make_jwt({"tenantInfraUrl": "https://from-jwt.example/infra/1.0/"})
             out = config.resolve_tenant_url_for_cappy(jwt=jwt_tok)
             self.assertTrue(out.startswith("https://env-only.example"))
@@ -73,18 +76,35 @@ class TestJwtTenant(unittest.TestCase):
     def test_resolve_tenant_url_for_cappy_from_jwt(self):
         from config import config
 
-        with patch.dict(os.environ, {"MOODYS_TENANT_URL": ""}):
+        with patch.dict(os.environ, {"MOODYS_TENANT_URL": "", "GLOBAL_TENANT_INFRA_URL": ""}):
             jwt_tok = _make_jwt({"tenantInfraUrl": "https://jwt-tenant.example.com/infra/1.0/"})
             out = config.resolve_tenant_url_for_cappy(jwt=jwt_tok)
             self.assertEqual(out, "https://jwt-tenant.example.com/infra/1.0/")
 
-    def test_resolve_tenant_url_for_cappy_missing_raises(self):
+    def test_resolve_tenant_url_for_cappy_qa_fallback_when_jwt_unmapped(self):
         from config import config
 
-        with patch.dict(os.environ, {"MOODYS_TENANT_URL": ""}):
+        with patch.dict(os.environ, {"MOODYS_TENANT_URL": "", "GLOBAL_TENANT_INFRA_URL": ""}):
             jwt_tok = _make_jwt({"sub": "only"})
-            with self.assertRaises(ValueError):
-                config.resolve_tenant_url_for_cappy(jwt=jwt_tok)
+            out = config.resolve_tenant_url_for_cappy(jwt=jwt_tok)
+            self.assertEqual(out, config.FALLBACK_QA_MOODYS_TENANT_URL)
+
+    def test_resolve_tenant_url_for_cappy_qa_fallback_no_jwt(self):
+        from config import config
+
+        with patch.dict(os.environ, {"MOODYS_TENANT_URL": "", "GLOBAL_TENANT_INFRA_URL": ""}):
+            out = config.resolve_tenant_url_for_cappy(jwt=None)
+            self.assertEqual(out, config.FALLBACK_QA_MOODYS_TENANT_URL)
+
+    def test_resolve_tenant_url_for_cappy_global_env_second(self):
+        from config import config
+
+        with patch.dict(
+            os.environ,
+            {"MOODYS_TENANT_URL": "", "GLOBAL_TENANT_INFRA_URL": "https://global.example/infra/1.0/"},
+        ):
+            out = config.resolve_tenant_url_for_cappy(jwt=None)
+            self.assertEqual(out, "https://global.example/infra/1.0/")
 
 
 if __name__ == "__main__":
