@@ -64,6 +64,10 @@ class Model:
         # When settings.returnReportsInResponse is true, run() sets this to {"reports": {filename: object, ...}} for API responses.
         self.report_response_payload = None
 
+    def _is_library_mode(self):
+        """True when settings.libraryMode — importable runs: no S3 uploads, no zip, no log upload."""
+        return bool(self.model_run_parameters.settings.get("libraryMode"))
+
     def run(self):
         print("[Model run] START")
         self.logger.info(f'Running model: {self.model_run_parameters.name}')
@@ -80,23 +84,27 @@ class Model:
         print("[Model run] Step 3b: Build Hanmi ACL quarterly report (multi-section JSON)")
         self.build_hanmi_acl_quarterly_report()
 
-        print("[Model run] Step 4: Create zip of all report output files")
-        self.create_report_export_zip()
+        if not self._is_library_mode():
+            print("[Model run] Step 4: Create zip of all report output files")
+            self.create_report_export_zip()
 
         self._build_report_response_payload()
 
-        print("[Model run] Step 5: Create local model run parameters")
-        new_mrp = self.createLocalModelRunParameters()
-        print(f"[Model run] Local MRP written to: {new_mrp}")
+        if not self._is_library_mode():
+            print("[Model run] Step 5: Create local model run parameters")
+            new_mrp = self.createLocalModelRunParameters()
+            print(f"[Model run] Local MRP written to: {new_mrp}")
 
-        print("[Model run] Step 6: Create file dicts and upload outputs to S3")
-        all_files = self.io_session.createOutputFileDicts(new_mrp)
-        keys_preview = list(all_files.keys())[:15]
-        if len(all_files) > 15:
-            keys_preview.append("...")
-        print("[Model run] Uploading {} file(s): {}".format(len(all_files), keys_preview))
-        if all_files:
-            self.io_session.uploadFiles(all_files)
+            print("[Model run] Step 6: Create file dicts and upload outputs to S3")
+            all_files = self.io_session.createOutputFileDicts(new_mrp)
+            keys_preview = list(all_files.keys())[:15]
+            if len(all_files) > 15:
+                keys_preview.append("...")
+            print("[Model run] Uploading {} file(s): {}".format(len(all_files), keys_preview))
+            if all_files:
+                self.io_session.uploadFiles(all_files)
+        else:
+            print("[Model run] libraryMode: skipping zip, local MRP upload, and S3 output upload")
         print("[Model run] END")
 
     def sortOutInstrumentReferences(self, all_files):
@@ -1157,5 +1165,5 @@ class Model:
         """Delete temp directories and upload logfile and batch id file"""
         if not keep_temp:
             self.io_session.deleteTempDirectories()
-        if log_file:
+        if log_file and not self._is_library_mode():
             self.io_session.uploadFiles({'log': log_file})

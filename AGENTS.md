@@ -43,11 +43,14 @@ Compact context for agents. See README.md for full project layout.
 6. Interactive API (FastAPI)  
    `runner/api/main.py` + `process.py`: `POST {api.prefix}/v1/execute` with Bearer JWT; body is either `modelRunParameter` (+ optional `settingsPatch`) or `mrpS3Key`. Calls `run_model_batch(..., return_model=True)`; returns merged `report_response_payload` when `returnReportsInResponse` is set. Image: `dockerbuild/api/Dockerfile`. HOCON: `conf/application.conf`. `model/__init__.py` lazy-loads `Model` so importing the API stack does not require moodyscappy until a run executes.
 
-6. Listing / diagnostics  
+7. Library entry — `interactive_run`  
+   `model/interactive.py`: `interactive_run(jwt, analysis_ids, ...)` uses `build_interactive_mrp()` (`libraryMode`, `liveS3InputsByAnalysisId`, `returnReportsInResponse`), temp `modelRunParameter.json`, then `run_model_batch`. **`settings.libraryMode`**: `Model.run()` skips zip, Step 5–6 S3 uploads, and log upload in `cleanUp()`; only JWT-driven S3 **downloads** (inputs). Returns **one dict** (one JSON): `quarterly_summary_report` + `hanmi_acl_quarterly_report` (or `null`). Tests: `tests/test_interactive.py`.
+
+8. Listing / diagnostics  
    - Step 1: `list_and_print_s3_folders()` lists bucket/prefix (from `inputPath`).
    - In callback branch: list and print files under each `output/.../scenarioidentifier=Summary/` for each analysis ID.
 
-7. Print logging  
+9. Print logging  
    Steps and instrumentResult read/aggregate/write are logged with `[Model run]` / `[instrumentResult]` / `[getSourceInputFiles]` prefixes.
 
 ---
