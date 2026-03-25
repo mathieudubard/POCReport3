@@ -1,6 +1,6 @@
 from moodyscappy import Cappy
 import glob
-import iosession
+from . import iosession
 import json
 import logging
 from json import JSONDecodeError
