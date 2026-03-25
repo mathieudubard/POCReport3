@@ -21,7 +21,13 @@ def run_model_batch(args, return_model=False):
     logger = logging.getLogger(__name__)
     model_run_parameters_path = args.s3 if args.s3 else args.local
     local_mode = bool(args.local)
-    credentials = {'jwt': args.jwt, 'username': args.unpw[0], 'password': args.unpw[1]}
+    credentials = {
+        'jwt': args.jwt,
+        'username': args.unpw[0],
+        'password': args.unpw[1],
+        # Cappy reads ``sso_url`` from kwargs; env alone is not always applied (e.g. some Domino runtimes).
+        'sso_url': config.resolve_sso_url_for_cappy(),
+    }
     if not args.proxyjwt and args.proxyunpw == [None, None]:
         proxy_credentials = {}
     else:

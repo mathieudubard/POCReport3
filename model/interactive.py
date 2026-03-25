@@ -30,9 +30,6 @@ if _REPO_ROOT not in sys.path:
 
 logger = logging.getLogger(__name__)
 
-# Same QA base as config/local.ini — only applied when nothing else set MOODYS_SSO_URL (see _apply_host_env_config).
-_FALLBACK_QA_MOODYS_SSO_URL = "https://qa-api.sso.moodysanalytics.net/sso-api/"
-
 AnalysisId = Union[str, int]
 
 
@@ -46,9 +43,11 @@ def _apply_host_env_config(config_module) -> None:
 
     Also mirrors ``GLOBAL_SSO_API_SERVICE_URL`` → ``MOODYS_SSO_URL`` when the platform sets the former only.
 
-    If still unset, sets ``MOODYS_SSO_URL`` to the QA default (``_FALLBACK_QA_MOODYS_SSO_URL``) and logs **CRITICAL**
-    lines plus ``print`` so operators see last-resort behavior in Domino logs.
+    If still unset, sets ``MOODYS_SSO_URL`` to the QA default and logs **CRITICAL** lines plus ``print`` when that
+    fallback is used.
     """
+    from config import config as project_config
+
     explicit_ini = os.path.join(_REPO_ROOT, "config", "local.ini")
     if os.path.isfile(explicit_ini):
         config_module.processConfigurations(
@@ -67,18 +66,19 @@ def _apply_host_env_config(config_module) -> None:
         logger.info("Set MOODYS_SSO_URL from GLOBAL_SSO_API_SERVICE_URL")
 
     if not (os.environ.get("MOODYS_SSO_URL") or "").strip():
-        os.environ["MOODYS_SSO_URL"] = _FALLBACK_QA_MOODYS_SSO_URL
-        _log_last_resort_qa_sso_fallback()
+        os.environ["MOODYS_SSO_URL"] = project_config.resolve_sso_url_for_cappy()
+        if os.environ["MOODYS_SSO_URL"] == project_config.FALLBACK_QA_MOODYS_SSO_URL:
+            _log_last_resort_qa_sso_fallback(project_config.FALLBACK_QA_MOODYS_SSO_URL)
 
 
-def _log_last_resort_qa_sso_fallback() -> None:
+def _log_last_resort_qa_sso_fallback(url: str) -> None:
     """Loud diagnostics when QA SSO URL is applied because no other source set MOODYS_SSO_URL."""
     banner = "=" * 76
     lines = [
         banner,
         "LAST-RESORT FALLBACK: MOODYS_SSO_URL was unset after config + GLOBAL_SSO mirror.",
         "Cappy will use QA SSO base (same as config/local.ini default):",
-        "  " + _FALLBACK_QA_MOODYS_SSO_URL,
+        "  " + url,
         "This is NOT appropriate for production unless you intend QA SSO.",
         "Set MOODYS_SSO_URL or GLOBAL_SSO_API_SERVICE_URL in the environment, or ship config/local.ini.",
         banner,

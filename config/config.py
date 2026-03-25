@@ -8,6 +8,21 @@ CONFIG_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 LOGGING_CONFIGURATION_FILE = os.path.join(CONFIG_DIRECTORY, 'logging.ini')
 ENV_CONFIGURATION_FILE = os.path.join(CONFIG_DIRECTORY, 'local.ini')
 LOG_FILE = os.path.join(os.path.dirname(CONFIG_DIRECTORY), 'model' , 'log.log')  # Will be created/overwritten
+
+# moodyscappy Cappy: pass ``sso_url`` in credentials (see model/run.py); must not rely on env alone on all hosts.
+FALLBACK_QA_MOODYS_SSO_URL = "https://qa-api.sso.moodysanalytics.net/sso-api/"
+
+
+def resolve_sso_url_for_cappy():
+    """
+    SSO base URL for Cappy JWT validation (``/auth/certs``). Matches config/local.ini when env is loaded.
+    Order: ``MOODYS_SSO_URL``, ``GLOBAL_SSO_API_SERVICE_URL``, then QA fallback.
+    """
+    for key in ("MOODYS_SSO_URL", "GLOBAL_SSO_API_SERVICE_URL"):
+        v = (os.environ.get(key) or "").strip()
+        if v:
+            return v
+    return FALLBACK_QA_MOODYS_SSO_URL
 DO_NOT_LOG_MODULES = ['matplotlib', 's3transfer.utils', 's3transfer.futures', 's3transfer.tasks']  # Put noisy module names here if they are unneccessarily cluttering the logs
 
 
