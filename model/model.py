@@ -2,7 +2,12 @@ from moodyscappy import Cappy
 import gc
 import glob
 from . import iosession
-from .cappy_log import cappy_echo_info, milestone_banner
+from .cappy_log import (
+    cappy_echo_info,
+    log_cappy_jwt_unusable,
+    looks_like_cappy_jwt_failure,
+    milestone_banner,
+)
 import json
 import logging
 from json import JSONDecodeError
@@ -131,7 +136,12 @@ class Model:
             credentials.get("sso_url"),
             credentials.get("tenant_url"),
         )
-        self.cap_session = Cappy(**credentials)
+        try:
+            self.cap_session = Cappy(**credentials)
+        except Exception as e:
+            if looks_like_cappy_jwt_failure(e):
+                log_cappy_jwt_unusable(self.logger, e, "main Cappy session")
+            raise
         self.io_session = iosession.IOSession(self.cap_session, model_run_parameters_path, local_mode, credentials)
         self.model_run_parameters = self.io_session.model_run_parameters
         if proxy_credentials:
@@ -141,7 +151,12 @@ class Model:
                 proxy_credentials.get("sso_url"),
                 proxy_credentials.get("tenant_url"),
             )
-            self.proxy_cap_session = Cappy(**proxy_credentials, errors='log')
+            try:
+                self.proxy_cap_session = Cappy(**proxy_credentials, errors='log')
+            except Exception as e:
+                if looks_like_cappy_jwt_failure(e):
+                    log_cappy_jwt_unusable(self.logger, e, "proxy Cappy session")
+                raise
         # When settings.returnReportsInResponse is true, run() sets this to {"reports": {filename: object, ...}} for API responses.
         self.report_response_payload = None
         self._parquet_load_cache = {}

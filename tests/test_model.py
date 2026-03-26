@@ -540,5 +540,30 @@ class TestRunEntrypoint(unittest.TestCase):
         self.assertFalse(args.s3)
 
 
+class TestCappyJwtFailureDetection(unittest.TestCase):
+    """looks_like_cappy_jwt_failure used when Cappy rejects JWT (signature, etc.)."""
+
+    def test_signature_message_detected(self):
+        import cappy_log
+
+        self.assertTrue(
+            cappy_log.looks_like_cappy_jwt_failure(Exception("Signature verification failed."))
+        )
+
+    def test_jwterror_type_detected(self):
+        import cappy_log
+
+        class FakeJWTError(Exception):
+            pass
+
+        FakeJWTError.__name__ = "JWTError"
+        self.assertTrue(cappy_log.looks_like_cappy_jwt_failure(FakeJWTError("x")))
+
+    def test_unrelated_error_not_flagged(self):
+        import cappy_log
+
+        self.assertFalse(cappy_log.looks_like_cappy_jwt_failure(ValueError("network")))
+
+
 if __name__ == "__main__":
     unittest.main()
