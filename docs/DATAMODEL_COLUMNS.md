@@ -10,7 +10,7 @@ Canonical attribute names from datamodel/ImpairmentStudio-DataDictionary.csv (At
 |------------|--------------------------|--------|
 | Join key | `instrumentIdentifier` | Required for all result/reporting joins |
 | Join key (optional) | `analysisIdentifier` | When present in both sides |
-| Segment / portfolio | `portfolioIdentifier` | First-preference segment dimension; see Segmentation dimensions below |
+| Segment / portfolio | `assetClass` (then `portfolioIdentifier`, …) | First-preference segment dimension; see Segmentation dimensions below |
 | Evaluation type | `ascImpairmentEvaluation` | Collectively vs Individually evaluated |
 | Methodology (PD) | `pdModelName` | Fallback when lossRateModelName null |
 | Methodology (LGD) | `lgdModelName` | Fallback when lossRateModelName null |
@@ -24,8 +24,8 @@ The report uses one segment dimension per dataset: the first candidate below tha
 
 | Order | Datamodel attribute name | Notes |
 |-------|---------------------------|--------|
-| 1 | `portfolioIdentifier` | Portfolio / segment label |
-| 2 | `assetClass` | Asset class |
+| 1 | `assetClass` | Asset class (preferred when present; aligns with typical CRE / Retail / SME exhibits) |
+| 2 | `portfolioIdentifier` | Portfolio / segment label |
 | 3 | `assetSubClass1` | Sub asset class 1 |
 | 4 | `assetSubClass2` | Sub asset class 2 |
 | 5 | `portfolioSubType1` | Portfolio sub-type 1 (e.g. Residential mortgage, Consumer loan, Commercial mortgage) |

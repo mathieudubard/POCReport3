@@ -70,6 +70,29 @@
       color: var(--accent);
     }
     .adjustment-card p { margin: 0.35rem 0; font-size: 0.9rem; text-align: left; }
+    .adj-date-heading {
+      font-size: 1rem;
+      margin: 1.25rem 0 0.5rem;
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .adj-analysis-heading {
+      font-size: 0.92rem;
+      margin: 0.85rem 0 0.35rem;
+      font-weight: 600;
+      color: #333;
+    }
+    .adj-quarter-pill {
+      display: inline-block;
+      margin-left: 0.35rem;
+      padding: 0.1rem 0.45rem;
+      font-size: 0.78rem;
+      font-weight: 500;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      vertical-align: middle;
+    }
     .narrative {
       font-size: 0.9rem;
       margin: 0.5rem 0 1rem;
@@ -101,6 +124,21 @@
     .table-pdf thead tr.superhead th {
       background: #d8e4f0;
       font-size: 0.72rem;
+    }
+    .macro-asof {
+      display: block;
+      font-size: 0.65rem;
+      font-weight: 400;
+      color: var(--muted);
+      line-height: 1.2;
+    }
+    table.seg-meth td[rowspan] {
+      vertical-align: top;
+    }
+    tr.collective-total-row td {
+      font-weight: 600;
+      border-top: 2px solid var(--border);
+      background: var(--head);
     }
     .toolbar {
       font-family: system-ui, Segoe UI, sans-serif;
@@ -295,6 +333,7 @@
   /**
    * PDF 1.1.3: rows = segments, columns = 3 balance + 2 deltas + 3 LR + 2 LR deltas + 3 reserve + 2 res deltas.
    * Uses up to the last three chronological quarters in the data.
+   * When rows include parentSegment + subSegment (from instrumentReference), renders two segment columns with rowspan on parent.
    */
   function buildLossRatesPdfTable(rows, title) {
     if (!Array.isArray(rows) || !rows.length) {
@@ -309,9 +348,16 @@
     if (!q3.length) return '<p class="empty">No quarter labels.</p>';
 
     var grid = {};
+    var metaBySeg = {};
     rows.forEach(function (r) {
       var seg = String(r.segment == null ? '' : r.segment);
       if (!grid[seg]) grid[seg] = {};
+      if (!metaBySeg[seg]) {
+        metaBySeg[seg] = {
+          parent: r.parentSegment,
+          sub: r.subSegment,
+        };
+      }
       var q = String(r.quarterLabel || '');
       grid[seg][q] = {
         amortizedCost: r.amortizedCost,
@@ -322,7 +368,25 @@
       };
     });
 
-    var segs = sortSegmentsForPdf(Object.keys(grid));
+    var hasSub = rows.some(function (r) {
+      return r.subSegment != null && String(r.subSegment).trim() !== '';
+    });
+
+    function sortSegKeys(keys) {
+      if (!hasSub) return sortSegmentsForPdf(keys);
+      return keys.slice().sort(function (a, b) {
+        var ma = metaBySeg[a] || {};
+        var mb = metaBySeg[b] || {};
+        var pa = String(ma.parent != null ? ma.parent : '');
+        var pb = String(mb.parent != null ? mb.parent : '');
+        var sa = String(ma.sub != null ? ma.sub : '');
+        var sb = String(mb.sub != null ? mb.sub : '');
+        if (pa !== pb) return pa.localeCompare(pb);
+        return sa.localeCompare(sb);
+      });
+    }
+
+    var segs = sortSegKeys(Object.keys(grid));
 
     var q1 = q3[0];
     var q2 = q3.length >= 2 ? q3[1] : null;
@@ -332,12 +396,53 @@
       return r.lossRatePct != null && r.lossRatePct !== '';
     });
 
+    function appendMetricCells(h2, g) {
+      var c1 = g[q1] || {};
+      var c2 = q2 ? (g[q2] || {}) : {};
+      var c3 = q3c ? (g[q3c] || {}) : {};
+
+      var b1 = c1.amortizedCost;
+      var b2 = q2 ? c2.amortizedCost : null;
+      var b3 = q3c ? c3.amortizedCost : null;
+
+      var lr1 = isQual ? c1.qualitativeRatePct : c1.lossRatePct;
+      var lr2 = q2 ? (isQual ? c2.qualitativeRatePct : c2.lossRatePct) : null;
+      var lr3 = q3c ? (isQual ? c3.qualitativeRatePct : c3.lossRatePct) : null;
+
+      var res1 = isQual ? c1.qualitativeReserve : c1.quantitativeReserve;
+      var res2 = q2 ? (isQual ? c2.qualitativeReserve : c2.quantitativeReserve) : null;
+      var res3 = q3c ? (isQual ? c3.qualitativeReserve : c3.quantitativeReserve) : null;
+
+      h2 += '<td>' + fmtThousands(b1) + '</td>';
+      h2 += '<td>' + (q2 ? fmtThousands(b2) : '—') + '</td>';
+      h2 += '<td>' + (q3c ? fmtThousands(b3) : '—') + '</td>';
+      h2 += '<td>' + (q3c && q1 ? fmtThousandsDelta(b3, b1) : '—') + '</td>';
+      h2 += '<td>' + (q3c && q2 ? fmtThousandsDelta(b3, b2) : '—') + '</td>';
+
+      h2 += '<td>' + fmtLossRatePct(lr1) + '</td>';
+      h2 += '<td>' + (q2 ? fmtLossRatePct(lr2) : '—') + '</td>';
+      h2 += '<td>' + (q3c ? fmtLossRatePct(lr3) : '—') + '</td>';
+      h2 += '<td>' + (q3c && q2 ? fmtPctPointDelta(lr3, lr2) : '—') + '</td>';
+      h2 += '<td>' + (q3c && q1 ? fmtPctPointDelta(lr3, lr1) : '—') + '</td>';
+
+      h2 += '<td>' + fmtThousands(res1) + '</td>';
+      h2 += '<td>' + (q2 ? fmtThousands(res2) : '—') + '</td>';
+      h2 += '<td>' + (q3c ? fmtThousands(res3) : '—') + '</td>';
+      h2 += '<td>' + (q3c && q2 ? fmtThousandsDelta(res3, res2) : '—') + '</td>';
+      h2 += '<td>' + (q3c && q1 ? fmtThousandsDelta(res3, res1) : '—') + '</td>';
+      return h2;
+    }
+
     var h = '';
     h += '<h3>' + esc(title) + '</h3>';
     h += '<p class="caption">(Dollars in thousands)</p>';
-    h += '<table class="table-pdf"><thead>';
+    h += '<table class="table-pdf' + (hasSub ? ' seg-meth' : '') + '"><thead>';
     h += '<tr class="superhead">';
-    h += '<th rowspan="2">Segment</th>';
+    if (hasSub) {
+      h += '<th rowspan="2">Segment</th><th rowspan="2">Sub-segment</th>';
+    } else {
+      h += '<th rowspan="2">Segment</th>';
+    }
     h += '<th colspan="5">Total pooled balance</th>';
     h += '<th colspan="5">Loss rates</th>';
     h += '<th colspan="5">' + (isQual ? 'Qualitative reserve' : 'Quantitative reserve') + '</th>';
@@ -357,44 +462,35 @@
     h += '<th>Incr./Decr.<br />(Q to Q)</th><th>Incr./Decr.<br />(Y to Y)</th>';
     h += '</tr></thead><tbody>';
 
-    segs.forEach(function (seg) {
-      var g = grid[seg] || {};
-      var c1 = g[q1] || {};
-      var c2 = q2 ? (g[q2] || {}) : {};
-      var c3 = q3c ? (g[q3c] || {}) : {};
-
-      var b1 = c1.amortizedCost;
-      var b2 = q2 ? c2.amortizedCost : null;
-      var b3 = q3c ? c3.amortizedCost : null;
-
-      var r1 = isQual ? c1.qualitativeRatePct : c1.lossRatePct;
-      var r2 = q2 ? (isQual ? c2.qualitativeRatePct : c2.lossRatePct) : null;
-      var r3 = q3c ? (isQual ? c3.qualitativeRatePct : c3.lossRatePct) : null;
-
-      var res1 = isQual ? c1.qualitativeReserve : c1.quantitativeReserve;
-      var res2 = q2 ? (isQual ? c2.qualitativeReserve : c2.quantitativeReserve) : null;
-      var res3 = q3c ? (isQual ? c3.qualitativeReserve : c3.quantitativeReserve) : null;
-
-      h += '<tr><td>' + esc(seg) + '</td>';
-      h += '<td>' + fmtThousands(b1) + '</td>';
-      h += '<td>' + (q2 ? fmtThousands(b2) : '—') + '</td>';
-      h += '<td>' + (q3c ? fmtThousands(b3) : '—') + '</td>';
-      h += '<td>' + (q3c && q1 ? fmtThousandsDelta(b3, b1) : '—') + '</td>';
-      h += '<td>' + (q3c && q2 ? fmtThousandsDelta(b3, b2) : '—') + '</td>';
-
-      h += '<td>' + fmtLossRatePct(r1) + '</td>';
-      h += '<td>' + (q2 ? fmtLossRatePct(r2) : '—') + '</td>';
-      h += '<td>' + (q3c ? fmtLossRatePct(r3) : '—') + '</td>';
-      h += '<td>' + (q3c && q2 ? fmtPctPointDelta(r3, r2) : '—') + '</td>';
-      h += '<td>' + (q3c && q1 ? fmtPctPointDelta(r3, r1) : '—') + '</td>';
-
-      h += '<td>' + fmtThousands(res1) + '</td>';
-      h += '<td>' + (q2 ? fmtThousands(res2) : '—') + '</td>';
-      h += '<td>' + (q3c ? fmtThousands(res3) : '—') + '</td>';
-      h += '<td>' + (q3c && q2 ? fmtThousandsDelta(res3, res2) : '—') + '</td>';
-      h += '<td>' + (q3c && q1 ? fmtThousandsDelta(res3, res1) : '—') + '</td>';
-      h += '</tr>';
-    });
+    if (hasSub) {
+      var byParent = {};
+      segs.forEach(function (seg) {
+        var p = metaBySeg[seg] && metaBySeg[seg].parent != null ? String(metaBySeg[seg].parent) : '';
+        if (!byParent[p]) byParent[p] = [];
+        byParent[p].push(seg);
+      });
+      var pkeys = sortSegmentsForPdf(Object.keys(byParent));
+      pkeys.forEach(function (p) {
+        var subs = byParent[p];
+        var rs = subs.length;
+        subs.forEach(function (seg, i) {
+          var g = grid[seg] || {};
+          var m = metaBySeg[seg] || {};
+          h += '<tr>';
+          if (i === 0) h += '<td rowspan="' + rs + '">' + esc(p || '—') + '</td>';
+          h += '<td>' + esc(m.sub != null && String(m.sub).trim() !== '' ? m.sub : '—') + '</td>';
+          h = appendMetricCells(h, g);
+          h += '</tr>';
+        });
+      });
+    } else {
+      segs.forEach(function (seg) {
+        var g = grid[seg] || {};
+        h += '<tr><td>' + esc(seg) + '</td>';
+        h = appendMetricCells(h, g);
+        h += '</tr>';
+      });
+    }
 
     h += '</tbody></table>';
     return h;
@@ -512,10 +608,113 @@
   }
 
   /**
+   * segmentMethodology: parentSegment + subSegment + methodology when ref has a finer dimension;
+   * otherwise segment + methodology. Viewer uses rowspan on parent segment to avoid repeated labels.
+   */
+  function renderSegmentMethodologyTable(rows) {
+    if (!Array.isArray(rows) || !rows.length) return '<p class="empty">No rows.</p>';
+    var list = rows.slice();
+    function hasSub(r) {
+      return r.subSegment != null && String(r.subSegment).trim() !== '';
+    }
+    var useThreeCols = list.some(function (r) { return hasSub(r); });
+    function parentKey(r) {
+      if (r.parentSegment != null && String(r.parentSegment).trim() !== '') return String(r.parentSegment);
+      return String(r.segment == null ? '' : r.segment);
+    }
+    if (!useThreeCols) {
+      var groups = {};
+      list.forEach(function (r) {
+        var k = String(r.segment == null ? '' : r.segment);
+        if (!groups[k]) groups[k] = [];
+        groups[k].push(r);
+      });
+      var keys = sortSegmentsForPdf(Object.keys(groups));
+      var h = '<table class="table-pdf seg-meth"><thead><tr><th>Segment</th><th>Methodology</th></tr></thead><tbody>';
+      keys.forEach(function (k) {
+        var g = groups[k];
+        g.sort(function (a, b) {
+          return String(a.methodology || '').localeCompare(String(b.methodology || ''));
+        });
+        var rs = g.length;
+        g.forEach(function (r, i) {
+          h += '<tr>';
+          if (i === 0) h += '<td rowspan="' + rs + '">' + esc(k || '—') + '</td>';
+          h += '<td>' + esc(r.methodology) + '</td></tr>';
+        });
+      });
+      h += '</tbody></table>';
+      return h;
+    }
+    var byParent = {};
+    list.forEach(function (r) {
+      var p = parentKey(r);
+      if (!byParent[p]) byParent[p] = [];
+      byParent[p].push(r);
+    });
+    var pkeys = sortSegmentsForPdf(Object.keys(byParent));
+    var h2 = '<table class="table-pdf seg-meth"><thead><tr><th>Segment</th><th>Sub-segment</th><th>Methodology</th></tr></thead><tbody>';
+    pkeys.forEach(function (p) {
+      var g = byParent[p];
+      g.sort(function (a, b) {
+        var s = String(a.subSegment || '').localeCompare(String(b.subSegment || ''));
+        if (s !== 0) return s;
+        return String(a.methodology || '').localeCompare(String(b.methodology || ''));
+      });
+      var rs = g.length;
+      g.forEach(function (r, i) {
+        h2 += '<tr>';
+        if (i === 0) h2 += '<td rowspan="' + rs + '">' + esc(p || '—') + '</td>';
+        h2 += '<td>' + esc(hasSub(r) ? r.subSegment : '—') + '</td>';
+        h2 += '<td>' + esc(r.methodology) + '</td></tr>';
+      });
+    });
+    h2 += '</tbody></table>';
+    return h2;
+  }
+
+  /**
+   * macroMatrix: { variables: [ { variableName, columns: [{ quarterLabel, macroBaseAsOfDate }], rows: [{ valueDate, valuesByQuarter }] } ] }
+   * macroFlat / macroWide: legacy flat and one-value-per-quarter summary.
+   */
+  function renderMacroMatrix(macroMatrix) {
+    var vars = macroMatrix && Array.isArray(macroMatrix.variables) ? macroMatrix.variables : [];
+    if (!vars.length) return '';
+    var html = '';
+    html += '<p class="caption">Moody\'s baseline — value date (rows) × reporting quarter and BASE as-of date (columns). One cell per variable snapshot.</p>';
+    vars.forEach(function (mv) {
+      var cols = mv.columns || [];
+      var rows = mv.rows || [];
+      var qlOrder = cols.map(function (c) { return c.quarterLabel; });
+      html += '<h3>' + esc(mv.variableName || '') + '</h3>';
+      html += '<table class="table-pdf"><thead><tr><th>Value date</th>';
+      cols.forEach(function (c) {
+        var sub = c.macroBaseAsOfDate ? '<br><span class="macro-asof">as of ' + esc(String(c.macroBaseAsOfDate)) + '</span>' : '';
+        html += '<th>' + esc(formatQuarterShort(c.quarterLabel)) + sub + '</th>';
+      });
+      html += '</tr></thead><tbody>';
+      rows.forEach(function (row) {
+        html += '<tr><td>' + esc(row.valueDate) + '</td>';
+        var vbq = row.valuesByQuarter && typeof row.valuesByQuarter === 'object' ? row.valuesByQuarter : {};
+        qlOrder.forEach(function (ql) {
+          var v = vbq[ql];
+          html += '<td>' + (v == null || v === '' ? '—' : fmtNum(v)) + '</td>';
+        });
+        html += '</tr>';
+      });
+      html += '</tbody></table>';
+    });
+    return html;
+  }
+
+  /**
    * macroFlat: rows with variableName, valueDate, value, optional quarterLabel.
    * macroWide: { quarterLabels: [], rows: [ { variableName, valuesByQuarter: { 'Q1 2025': n } } ] }
    */
-  function renderMacroWideByVariable(macroFlat, macroWide) {
+  function renderMacroWideByVariable(macroFlat, macroWide, macroMatrix) {
+    if (macroMatrix && typeof macroMatrix === 'object' && Array.isArray(macroMatrix.variables) && macroMatrix.variables.length) {
+      return renderMacroMatrix(macroMatrix);
+    }
     var wide = macroWide && typeof macroWide === 'object' && !Array.isArray(macroWide) ? macroWide : null;
     var cols = wide && Array.isArray(wide.quarterLabels) ? wide.quarterLabels : [];
     var wideRows = wide && Array.isArray(wide.rows) ? wide.rows : [];
@@ -642,8 +841,36 @@
 
   var ADJ_HIDE_KEYS = {
     adjustmentId: 1, id: 1, analysisId: 1, createdBy: 1, modifiedBy: 1, self: 1,
-    attachments: 1, errors: 1, order: 1
+    attachments: 1, errors: 1, order: 1, analysisSummaries: 1, byAnalysisId: 1,
+    currentAnalysisId: 1, analysisIds: 1
   };
+
+  function buildAdjustmentAnalysisLookup(adj) {
+    var map = {};
+    var arr = adj && Array.isArray(adj.analysisSummaries) ? adj.analysisSummaries : [];
+    arr.forEach(function (s) {
+      if (s && s.analysisId != null) map[String(s.analysisId)] = s;
+    });
+    return map;
+  }
+
+  function compareReportingDateStrings(a, b) {
+    var A = Date.parse(String(a || '').trim());
+    var B = Date.parse(String(b || '').trim());
+    if (!isNaN(A) && !isNaN(B) && A !== B) return A - B;
+    if (!isNaN(A) && isNaN(B)) return -1;
+    if (isNaN(A) && !isNaN(B)) return 1;
+    return String(a || '').localeCompare(String(b || ''));
+  }
+
+  function formatReportingDateSectionTitle(rd) {
+    if (rd == null || rd === '') return 'Reporting date — not available';
+    var d = Date.parse(String(rd).trim());
+    if (isNaN(d)) return 'Reporting date — ' + String(rd);
+    return 'Reporting date — ' + new Date(d).toLocaleDateString(undefined, {
+      year: 'numeric', month: 'long', day: 'numeric'
+    });
+  }
 
   function stripEmailsAndIds(s) {
     if (typeof s !== 'string') return s;
@@ -754,19 +981,49 @@
     }
     if (typeof adj === 'object' && adj.byAnalysisId && typeof adj.byAnalysisId === 'object') {
       var bag = adj.byAnalysisId;
-      var ids = Object.keys(bag).sort();
-      var anyRows = ids.some(function (aid) { return Array.isArray(bag[aid]) && bag[aid].length; });
-      if (!anyRows) {
+      var lookup = buildAdjustmentAnalysisLookup(adj);
+      var ids = Object.keys(bag).filter(function (aid) { return Array.isArray(bag[aid]) && bag[aid].length; });
+      if (!ids.length) {
         return '<h2>Qualitative adjustments</h2><p class="empty">No rows returned from the adjustment API for any analysis.</p>';
       }
+      var entries = ids.map(function (aid) {
+        var meta = lookup[aid] || {};
+        var displayName = meta.analysisName && String(meta.analysisName).trim();
+        if (!displayName) displayName = meta.quarterLabel && String(meta.quarterLabel).trim();
+        if (!displayName) displayName = 'Analysis';
+        return {
+          analysisId: aid,
+          analysisName: displayName,
+          reportingDate: meta.reportingDate != null && meta.reportingDate !== '' ? String(meta.reportingDate) : '',
+          quarterLabel: meta.quarterLabel,
+          rows: bag[aid]
+        };
+      });
+      entries.sort(function (a, b) {
+        var c = compareReportingDateStrings(a.reportingDate, b.reportingDate);
+        if (c !== 0) return c;
+        return String(a.analysisName).localeCompare(String(b.analysisName));
+      });
+      var groups = [];
+      entries.forEach(function (e) {
+        var key = e.reportingDate || '_nodate';
+        var last = groups[groups.length - 1];
+        if (!last || last.key !== key) {
+          groups.push({ key: key, reportingDate: e.reportingDate, items: [e] });
+        } else {
+          last.items.push(e);
+        }
+      });
       var hw = '<h2>Qualitative adjustments</h2>';
-      hw += '<p class="narrative">Per analysis (Impairment Studio adjustment API). Identifiers omitted in cards.</p>';
-      ids.forEach(function (aid) {
-        var rows = bag[aid];
-        if (!Array.isArray(rows) || !rows.length) return;
-        hw += '<h3>Analysis ' + esc(aid) + '</h3>';
-        rows.forEach(function (row, i) {
-          hw += renderOneAdjustmentCard(row, i);
+      hw += '<p class="narrative">Grouped by reporting date and analysis name (from analysis details). Adjustment cards omit internal identifiers.</p>';
+      groups.forEach(function (g) {
+        hw += '<h3 class="adj-date-heading">' + esc(formatReportingDateSectionTitle(g.reportingDate)) + '</h3>';
+        g.items.forEach(function (e) {
+          var sub = e.quarterLabel ? '<span class="adj-quarter-pill">' + esc(e.quarterLabel) + '</span>' : '';
+          hw += '<h4 class="adj-analysis-heading">' + esc(e.analysisName) + ' ' + sub + '</h4>';
+          e.rows.forEach(function (row, i) {
+            hw += renderOneAdjustmentCard(row, i);
+          });
         });
       });
       return hw;
@@ -776,7 +1033,7 @@
     }
     if (typeof adj === 'object') {
       var keys = Object.keys(adj).filter(function (k) {
-        return !ADJ_HIDE_KEYS[k] && k !== 'byAnalysisId' && k !== 'currentAnalysisId' && k !== 'analysisIds';
+        return !ADJ_HIDE_KEYS[k];
       });
       if (!keys.length) return '<h2>Qualitative adjustments</h2><p class="empty">No displayable fields.</p>';
       var h2 = '<h2>Qualitative adjustments</h2><table><tbody>';
@@ -788,6 +1045,70 @@
       return h2;
     }
     return '';
+  }
+
+  function renderAssumptionsAndParameters(h) {
+    var ap = h && h.assumptionsAndParameters;
+    if (!ap || typeof ap !== 'object') {
+      return '<p class="empty">Scenario list not available (re-run the model to populate <code>assumptionsAndParameters</code>).</p>';
+    }
+    var main = ap.mainAnalysis;
+    var prior = ap.priorAnalysis;
+    var comp = ap.comparison || {};
+    if (!main) {
+      return '<p class="empty">' + esc(comp.note || 'No current analysis.') + '</p>';
+    }
+    function scenarioTable(scenarios, caption) {
+      var rows = Array.isArray(scenarios) ? scenarios : [];
+      var t = '<p class="caption"><strong>' + esc(caption) + '</strong></p>';
+      if (!rows.length) {
+        t += '<p class="empty">No scenarios in analysisDetails.</p>';
+        return t;
+      }
+      t += '<table><thead><tr><th>Scenario</th><th>As-of date</th><th>Weight</th><th>Type</th></tr></thead><tbody>';
+      rows.forEach(function (s) {
+        var w = s.weight;
+        var wStr = w === null || w === undefined || w === '' ? '' : String(w);
+        t += '<tr><td>' + esc(s.name) + '</td><td>' + esc(s.asOfDate || '') + '</td><td>' + esc(wStr) +
+          '</td><td>' + esc(s.scenarioType || '') + '</td></tr>';
+      });
+      t += '</tbody></table>';
+      return t;
+    }
+    var html = '';
+    html += '<p class="narrative">Scenarios below are taken from the structured export (<code>analysisDetails</code> per analysis). They reflect the scenario set used for the current (main) run and, when a prior analysis is resolved, the prior run.</p>';
+    var mainTitle = (main.analysisName || main.analysisId || 'Current analysis');
+    if (main.quarterLabel) mainTitle += ' — ' + main.quarterLabel;
+    if (main.reportingDate) mainTitle += ' (' + main.reportingDate + ')';
+    html += scenarioTable(main.scenarios, 'Main analysis: ' + mainTitle);
+    if (prior) {
+      var priorTitle = (prior.analysisName || prior.analysisId || 'Prior analysis');
+      if (prior.quarterLabel) priorTitle += ' — ' + prior.quarterLabel;
+      if (prior.reportingDate) priorTitle += ' (' + prior.reportingDate + ')';
+      html += scenarioTable(prior.scenarios, 'Prior analysis: ' + priorTitle);
+    } else {
+      html += '<p class="caption"><strong>Prior analysis</strong></p><p class="empty">No prior analysis id resolved; comparison is limited to the main scenario list above.</p>';
+    }
+    if (prior) {
+      if (comp.sameScenarioSet === true) {
+        html += '<p class="narrative"><strong>Comparison:</strong> Scenario names match between main and prior (case-insensitive).</p>';
+      } else if (comp.sameScenarioSet === false) {
+        html += '<p class="narrative"><strong>Comparison:</strong> Scenario names differ between main and prior.</p>';
+        var om = asArray(comp.onlyInMain);
+        var op = asArray(comp.onlyInPrior);
+        var both = asArray(comp.inBoth);
+        if (om.length) {
+          html += '<p class="caption">Only in main: ' + esc(om.join(', ')) + '</p>';
+        }
+        if (op.length) {
+          html += '<p class="caption">Only in prior: ' + esc(op.join(', ')) + '</p>';
+        }
+        if (both.length) {
+          html += '<p class="caption">In both: ' + esc(both.join(', ')) + '</p>';
+        }
+      }
+    }
+    return html;
   }
 
   function renderExhibits(h) {
@@ -811,13 +1132,9 @@
     html += '<h2>1.1 Quantitative component analysis</h2>';
 
     html += '<h3>1.1.1 Segmentations and methodologies</h3>';
-    html += '<p class="narrative">The table below summarizes the quantitative methodologies selected for the period. Segment labels follow the source data.</p>';
+    html += '<p class="narrative">The table below summarizes the quantitative methodologies selected for the period. Parent segment is shown once; sub-segments (when present) avoid repeating the portfolio label.</p>';
     if (Array.isArray(h.segmentMethodology) && h.segmentMethodology.length) {
-      html += '<table><thead><tr><th>Segments</th><th>Methodology</th></tr></thead><tbody>';
-      h.segmentMethodology.forEach(function (r) {
-        html += '<tr><td>' + esc(r.segment) + '</td><td>' + esc(r.methodology) + '</td></tr>';
-      });
-      html += '</tbody></table>';
+      html += renderSegmentMethodologyTable(h.segmentMethodology);
     } else html += '<p class="empty">No rows.</p>';
 
     html += '<p class="narrative">Below is a summary of the allowance for pooled loans by methodology:</p>';
@@ -827,7 +1144,9 @@
       html += '<table><thead><tr><th>Collectively evaluated by methodology</th><th>Amortized cost</th>' +
         '<th>Quantitative</th><th>Qualitative</th><th>Total reserve</th><th>% of evaluation type</th></tr></thead><tbody>';
       h.collectivelyEvaluatedByMethodology.forEach(function (r) {
-        html += '<tr><td>' + esc(r.methodology) + '</td><td>' + fmtThousands(r.amortizedCost) + '</td><td>' +
+        var isTotal = r.rowType === 'total' || (r.methodology && String(r.methodology).toLowerCase() === 'total pooled');
+        var tr = isTotal ? '<tr class="collective-total-row">' : '<tr>';
+        html += tr + '<td>' + esc(r.methodology) + '</td><td>' + fmtThousands(r.amortizedCost) + '</td><td>' +
           fmtThousands(r.quantitativeReserve) + '</td><td>' + fmtThousands(r.qualitativeReserve) + '</td><td>' +
           fmtThousands(r.totalReserve) + '</td><td>' + fmtNum(r.pctOfEvaluationType) + '%</td></tr>';
       });
@@ -835,7 +1154,7 @@
     } else html += '<p class="empty">No rows.</p>';
 
     html += '<h3>1.1.2 Assumptions and parameters</h3>';
-    html += '<p class="empty">Narrative and assumption tables are not included in the structured export; add text in the source document if needed.</p>';
+    html += renderAssumptionsAndParameters(h);
 
     html += '<h3>1.1.3 Loss rates</h3>';
     html += '<p class="narrative">The following tables represent the weighted average quantitative reserve rates by segment for the periods indicated.</p>';
@@ -904,7 +1223,7 @@
 
     html += '<h2>Moody\'s baseline — macroeconomic variables</h2>';
     html += '<p class="narrative">The following tables reflect macroeconomic variable values from the source file (PDF layout is a forecast matrix by quarter).</p>';
-    html += renderMacroWideByVariable(asArray(h.macroeconomicBaseline), h.macroeconomicBaselineWide);
+    html += renderMacroWideByVariable(asArray(h.macroeconomicBaseline), h.macroeconomicBaselineWide, h.macroeconomicBaselineMatrix);
 
     html += '<h2>1.3 Individual component analysis</h2>';
     if (Array.isArray(h.individualAnalysis) && h.individualAnalysis.length) {

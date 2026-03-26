@@ -21,10 +21,17 @@ for _p in (_model_dir, _project_root):
 
 # Load model.model with moodyscappy/boto3 mocked, then model package (so model.run can import Model)
 import importlib.util
+import types
+
 _mocks = {"moodyscappy": MagicMock(), "boto3": MagicMock()}  # keep for TestRunEntrypoint
 with patch.dict("sys.modules", _mocks):
+    # Parent package so model.py's "from . import iosession" resolves (exec_module alone breaks relative imports)
+    _model_pkg = types.ModuleType("model")
+    _model_pkg.__path__ = [_model_dir]
+    sys.modules["model"] = _model_pkg
     _spec = importlib.util.spec_from_file_location("model.model", os.path.join(_model_dir, "model.py"))
     model_module = importlib.util.module_from_spec(_spec)
+    model_module.__package__ = "model"
     sys.modules["model.model"] = model_module
     _spec.loader.exec_module(model_module)
     import model  # noqa: F401 - loads package; __init__.py does "from model.model import Model"
@@ -358,9 +365,14 @@ class TestBuildHanmiAclQuarterlyReport(unittest.TestCase):
         self.assertIn("qualitativeReservesBySegment", data)
         self.assertIn("macroeconomicBaseline", data)
         self.assertIn("macroeconomicBaselineWide", data)
+        self.assertIn("macroeconomicBaselineMatrix", data)
         self.assertIn("individualAnalysis", data)
         self.assertIn("unfundedBySegment", data)
         self.assertIn("unfundedTrend", data)
+        self.assertIn("assumptionsAndParameters", data)
+        ap = data["assumptionsAndParameters"]
+        self.assertIn("mainAnalysis", ap)
+        self.assertIn("comparison", ap)
         self.assertEqual(data["reportMetadata"]["currentAnalysisId"], "c1")
         self.assertEqual(data["reportMetadata"]["priorAnalysisId"], "p1")
         # Multi-quarter: quantitative and unfunded trend rows include quarterLabel (from fallback [prior, current])
@@ -398,12 +410,17 @@ class TestBuildHanmiAclQuarterlyReport(unittest.TestCase):
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         coll = data["collectivelyEvaluatedByMethodology"]
-        self.assertEqual(len(coll), 1)
+        self.assertEqual(len(coll), 2)
         self.assertEqual(coll[0]["methodology"], "CRE Loss Rate Model")
         self.assertEqual(coll[0]["amortizedCost"], 3000.0)
         self.assertEqual(coll[0]["quantitativeReserve"], 30.0)
         self.assertEqual(coll[0]["qualitativeReserve"], 10.0)
         self.assertEqual(coll[0]["totalReserve"], 40.0)
+        self.assertEqual(coll[1]["methodology"], "Total pooled")
+        self.assertEqual(coll[1].get("rowType"), "total")
+        self.assertEqual(coll[1]["amortizedCost"], 3000.0)
+        self.assertEqual(coll[1]["totalReserve"], 40.0)
+        self.assertEqual(coll[1]["pctOfEvaluationType"], 100.0)
 
     def test_macroeconomic_baseline_when_macro_data_loaded(self):
         """When macro parquet is loaded, macroeconomicBaseline is populated."""
@@ -460,6 +477,7 @@ class TestBuildHanmiAclQuarterlyReport(unittest.TestCase):
             data = json.load(f)
         seg_meth = data["segmentMethodology"]
         self.assertGreater(len(seg_meth), 0, "segmentMethodology should be populated when ref has portfolioidentifier/pdmodelname")
+        self.assertEqual(seg_meth[0]["parentSegment"], "Seg A")
         self.assertEqual(seg_meth[0]["segment"], "Seg A")
         self.assertEqual(seg_meth[0]["methodology"], "EDF-X")
 
@@ -492,8 +510,63 @@ class TestBuildHanmiAclQuarterlyReport(unittest.TestCase):
             data = json.load(f)
         seg_meth = data["segmentMethodology"]
         self.assertGreater(len(seg_meth), 0, "segmentMethodology should use assetClass when portfolioIdentifier missing")
+        self.assertEqual(seg_meth[0]["parentSegment"], "Commercial")
         self.assertEqual(seg_meth[0]["segment"], "Commercial")
         self.assertEqual(seg_meth[0]["methodology"], "PD-1")
+
+    def test_assumptions_and_parameters_from_analysis_details(self):
+        """assumptionsAndParameters lists scenarios from analysisDetails and compares main vs prior."""
+        for aid, scenarios, rd in (
+            ("c1", [{"name": "BASE", "asOfDate": "2025-12-31", "weight": 0.5, "scenarioType": "imported"}, {"name": "S_NEW", "asOfDate": "2025-12-31", "weight": 0.5, "scenarioType": "imported"}], "2025-12-31"),
+            ("p1", [{"name": "BASE", "asOfDate": "2025-09-30", "weight": 1.0, "scenarioType": "imported"}], "2025-09-30"),
+        ):
+            path = os.path.join(self.report_dir, "analysisDetails_{}.json".format(aid))
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"name": "A-{}".format(aid), "reportingDate": rd, "scenarios": scenarios}, f)
+        self.model.build_hanmi_acl_quarterly_report()
+        with open(os.path.join(self.report_dir, "hanmi_acl_quarterly_report.json"), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        ap = data["assumptionsAndParameters"]
+        self.assertIsNotNone(ap.get("mainAnalysis"))
+        self.assertIsNotNone(ap.get("priorAnalysis"))
+        comp = ap["comparison"]
+        self.assertFalse(comp["sameScenarioSet"])
+        self.assertIn("BASE", comp["inBoth"])
+        self.assertIn("S_NEW", comp["onlyInMain"])
+
+    def test_quantitative_loss_rates_include_sub_segment_when_second_dimension_present(self):
+        """quantitativeLossRatesBySegment.main uses assetClass (primary) + portfolio (sub) when both exist."""
+        ref = pd.DataFrame({
+            "instrumentIdentifier": ["i1", "i2", "i3"],
+            "portfolioidentifier": ["Port A", "Port A", "Port B"],
+            "assetclass": ["C&I", "CRE", "C&I"],
+        })
+        res = pd.DataFrame({
+            "instrumentIdentifier": ["i1", "i2", "i3"],
+            "amortizedCost": [100.0, 200.0, 300.0],
+            "onBalanceSheetReserveUnadjusted": [1.0, 2.0, 3.0],
+        })
+
+        def load_mock(category, analysis_id, filter_summary=False):
+            if category == "instrumentResult" and analysis_id == "c1":
+                return res.copy()
+            if category == "instrumentReference" and analysis_id == "c1":
+                return ref.copy()
+            return None
+
+        self.model._load_parquet_for_analysis = load_mock
+        self.model.build_hanmi_acl_quarterly_report()
+        with open(os.path.join(self.report_dir, "hanmi_acl_quarterly_report.json"), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        main = data["quantitativeLossRatesBySegment"]["main"]
+        self.assertGreaterEqual(len(main), 3, "expect one row per (assetClass, portfolio) pair per quarter")
+        pairs = {(r.get("parentSegment"), r.get("subSegment")) for r in main if r.get("parentSegment")}
+        self.assertIn(("C&I", "Port A"), pairs)
+        self.assertIn(("CRE", "Port A"), pairs)
+        self.assertIn(("C&I", "Port B"), pairs)
+        r0 = next(r for r in main if r.get("segment") == "C&I — Port A")
+        self.assertEqual(r0.get("parentSegment"), "C&I")
+        self.assertEqual(r0.get("subSegment"), "Port A")
 
 
 class TestCreateReportExportZip(unittest.TestCase):

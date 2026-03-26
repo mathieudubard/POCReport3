@@ -35,10 +35,11 @@ REPORT_MACRO_QUARTERS_BACK = 4
 REPORT_MACRO_QUARTERS_FORWARD = 4
 
 # Segmentation dimensions from datamodel (instrumentReference): try in order; first found with non-null values wins.
+# assetClass is first so reports match typical ACL exhibits (CRE / Retail / SME) when both portfolio and asset class exist.
 # Each entry: (canonical_name, *flexible_variants for _resolve_column).
 SEGMENT_DIMENSION_CANDIDATES = [
-    ("portfolioIdentifier", "portfolioidentifier", "Portfolio Identifier", "portfolio_identifier"),
     ("assetClass", "assetclass", "Asset Class", "asset_class"),
+    ("portfolioIdentifier", "portfolioidentifier", "Portfolio Identifier", "portfolio_identifier"),
     ("assetSubClass1", "assetsubclass1", "Asset Sub Class 1", "asset_sub_class_1"),
     ("assetSubClass2", "assetsubclass2", "Asset Sub Class 2", "asset_sub_class_2"),
     ("portfolioSubType1", "portfoliosubtype1", "Portfolio Sub Type 1", "portfolio_sub_type_1"),
@@ -319,6 +320,32 @@ class Model:
                 non_null = df[col].notna() & (df[col].astype(str).str.strip() != "")
                 if non_null.any():
                     return canonical, col
+        return None, None
+
+    def _get_next_segment_column_after(self, df, primary_canonical_name):
+        """
+        Next finer segmentation dimension after ``primary_canonical_name`` (e.g. assetClass after portfolio).
+        Used so segment/methodology tables can show parent segment once and sub-segments per methodology row.
+        """
+        if df is None or df.empty or not primary_canonical_name:
+            return None, None
+        idx = None
+        for i, item in enumerate(SEGMENT_DIMENSION_CANDIDATES):
+            if item[0] == primary_canonical_name:
+                idx = i
+                break
+        if idx is None:
+            return None, None
+        for j in range(idx + 1, len(SEGMENT_DIMENSION_CANDIDATES)):
+            item = SEGMENT_DIMENSION_CANDIDATES[j]
+            canonical = item[0]
+            variants = item[1:] if len(item) > 1 else ()
+            col = self._resolve_column(df, canonical, *variants)
+            if col is None or col not in df.columns:
+                continue
+            non_null = df[col].notna() & (df[col].astype(str).str.strip() != "")
+            if non_null.any():
+                return canonical, col
         return None, None
 
     def _get_segmentation_candidates_for_debug(self, df):
@@ -837,6 +864,119 @@ class Model:
         except Exception:
             return None
 
+    def _get_analysis_display_meta_from_details(self, report_dir, analysis_id):
+        """
+        Read analysisDetails_{id}.json for human-facing labels: analysis ``name`` and ``reportingDate``.
+        Used for adjustment sections (prefer name over raw analysis id in reports).
+        """
+        if not report_dir or not analysis_id:
+            return {}
+        path = os.path.join(report_dir, "analysisDetails_{}.json".format(analysis_id))
+        if not os.path.isfile(path):
+            return {}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, JSONDecodeError):
+            return {}
+        name = data.get("name")
+        rd = data.get("reportingDate")
+        rd_str = None
+        if rd is not None:
+            try:
+                rd_str = pd.to_datetime(rd).strftime("%Y-%m-%d")
+            except Exception:
+                s = str(rd).strip()
+                rd_str = s if s else None
+        an = None
+        if name is not None:
+            an = str(name).strip() or None
+        return {"analysisName": an, "reportingDate": rd_str}
+
+    def _normalize_iso_date_str(self, value):
+        """Return YYYY-MM-DD for analysisDetails dates, or None."""
+        if value is None:
+            return None
+        try:
+            return pd.to_datetime(value).strftime("%Y-%m-%d")
+        except Exception:
+            s = str(value).strip()
+            return s if s else None
+
+    def _load_scenarios_from_analysis_details(self, report_dir, analysis_id):
+        """Return list of scenario dicts from analysisDetails ``scenarios`` array."""
+        if not report_dir or not analysis_id:
+            return []
+        path = os.path.join(report_dir, "analysisDetails_{}.json".format(analysis_id))
+        if not os.path.isfile(path):
+            return []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, JSONDecodeError):
+            return []
+        out = []
+        for s in (data.get("scenarios") or []):
+            if not isinstance(s, dict):
+                continue
+            w = s.get("weight")
+            try:
+                w = float(w) if w is not None and str(w).strip() != "" else None
+            except (TypeError, ValueError):
+                w = None
+            out.append({
+                "name": s.get("name"),
+                "asOfDate": self._normalize_iso_date_str(s.get("asOfDate")),
+                "weight": w,
+                "scenarioType": s.get("scenarioType"),
+            })
+        return out
+
+    def _build_assumptions_and_parameters(self, report_dir, main_analysis_id, prior_analysis_id):
+        """
+        Section 1.1.2: scenario lists from analysisDetails for main (current) vs prior analysis.
+        """
+        if not main_analysis_id:
+            return {
+                "mainAnalysis": None,
+                "priorAnalysis": None,
+                "comparison": {"sameScenarioSet": None, "note": "No current analysis id."},
+            }
+        main = {
+            "analysisId": str(main_analysis_id),
+            **{k: v for k, v in self._get_analysis_display_meta_from_details(report_dir, main_analysis_id).items()},
+            "quarterLabel": self._get_quarter_label(report_dir, main_analysis_id),
+            "scenarios": self._load_scenarios_from_analysis_details(report_dir, main_analysis_id),
+        }
+        prior = None
+        if prior_analysis_id:
+            prior = {
+                "analysisId": str(prior_analysis_id),
+                **{k: v for k, v in self._get_analysis_display_meta_from_details(report_dir, prior_analysis_id).items()},
+                "quarterLabel": self._get_quarter_label(report_dir, prior_analysis_id),
+                "scenarios": self._load_scenarios_from_analysis_details(report_dir, prior_analysis_id),
+            }
+        names_main = [str(s.get("name")).strip() for s in (main.get("scenarios") or []) if s.get("name")]
+        names_prior = [str(s.get("name")).strip() for s in ((prior or {}).get("scenarios") or []) if s.get("name")]
+        set_m = {n.lower() for n in names_main}
+        set_p = {n.lower() for n in names_prior}
+        only_main = sorted({n for n in names_main if n.lower() not in set_p}, key=str.lower)
+        only_prior = sorted({n for n in names_prior if n.lower() not in set_m}, key=str.lower)
+        in_both = sorted({n for n in names_main if n.lower() in set_p}, key=str.lower)
+        same_set = (set_m == set_p) if prior else None
+        return {
+            "mainAnalysis": main,
+            "priorAnalysis": prior,
+            "comparison": {
+                "sameScenarioSet": same_set,
+                "scenarioNamesMain": names_main,
+                "scenarioNamesPrior": names_prior,
+                "onlyInMain": only_main,
+                "onlyInPrior": only_prior,
+                "inBoth": in_both,
+            },
+        }
+
     def _filter_macro_for_report(self, df_macro, report_dir, current_id):
         """
         Filter macro DataFrame to only variables and valueDates needed for the report.
@@ -872,9 +1012,9 @@ class Model:
 
     def _get_macro_base_as_of_date(self, report_dir, analysis_id):
         """BASE scenario asOfDate (YYYY-MM-DD) from analysisDetails, for macro input path alignment."""
-        io = self.io_session
-        if hasattr(io, "_get_macro_scenario_date_from_analysis_details"):
-            return io._get_macro_scenario_date_from_analysis_details(report_dir, analysis_id)
+        for s in self._load_scenarios_from_analysis_details(report_dir, analysis_id):
+            if str(s.get("name") or "").strip().upper() == "BASE":
+                return s.get("asOfDate")
         return None
 
     def _build_macroeconomic_baseline_wide(self, flat_rows, quarter_labels_ordered):
@@ -917,6 +1057,68 @@ class Model:
                 vbq[ql] = t[1] if t is not None else None
             rows_out.append({"variableName": vn, "valuesByQuarter": vbq})
         out["rows"] = rows_out
+        return out
+
+    def _normalize_macro_value_date_key(self, value_date):
+        """Stable key for pivoting macro rows (ISO date string when parseable)."""
+        if value_date is None:
+            return None
+        try:
+            dt = pd.to_datetime(value_date, errors="coerce")
+            if pd.notna(dt):
+                return dt.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+        s = str(value_date).strip()
+        return s if s else None
+
+    def _build_macroeconomic_baseline_matrix(self, flat_rows, quarter_labels_ordered):
+        """
+        Per MEV: two-dimensional grid — valueDate (rows) × quarter / BASE as-of date (columns).
+        Each cell is the macroeconomicVariableValue for that (variable, quarterLabel, valueDate).
+        """
+        out = {"quarterLabels": list(quarter_labels_ordered or []), "variables": []}
+        if not flat_rows or not quarter_labels_ordered:
+            return out
+        ql_order = list(quarter_labels_ordered)
+        ql_set = set(ql_order)
+        asof_by_quarter = {}
+        for r in flat_rows:
+            ql = r.get("quarterLabel")
+            if ql in ql_set and ql not in asof_by_quarter and r.get("macroBaseAsOfDate"):
+                asof_by_quarter[ql] = r.get("macroBaseAsOfDate")
+        var_names = sorted({(r.get("variableName") or "").strip() for r in flat_rows if (r.get("variableName") or "").strip()})
+        for vn in var_names:
+            cells = {}  # (vd_key, ql) -> value
+            for r in flat_rows:
+                if (r.get("variableName") or "").strip() != vn:
+                    continue
+                ql = r.get("quarterLabel")
+                if ql not in ql_set:
+                    continue
+                vd_key = self._normalize_macro_value_date_key(r.get("valueDate"))
+                if not vd_key:
+                    continue
+                cells[(vd_key, ql)] = r.get("value")
+            vd_keys = list({k[0] for k in cells.keys()})
+
+            def _macro_matrix_vd_sort_key(x):
+                d = pd.to_datetime(x, errors="coerce")
+                return d if pd.notna(d) else pd.Timestamp(1900, 1, 1)
+
+            vd_keys.sort(key=_macro_matrix_vd_sort_key)
+            rows_out = []
+            for vd_key in vd_keys:
+                vbq = {}
+                for ql in ql_order:
+                    vbq[ql] = cells.get((vd_key, ql))
+                rows_out.append({"valueDate": vd_key, "valuesByQuarter": vbq})
+            columns_meta = [{"quarterLabel": ql, "macroBaseAsOfDate": asof_by_quarter.get(ql)} for ql in ql_order]
+            out["variables"].append({
+                "variableName": vn,
+                "columns": columns_meta,
+                "rows": rows_out,
+            })
         return out
 
     def build_quarterly_summary_report(self):
@@ -1152,16 +1354,32 @@ class Model:
         segment_dim_name, segment_col = None, None
         if df_ref_current is not None and not df_ref_current.empty:
             segment_dim_name, segment_col = self._get_segment_column(df_ref_current)
+            sub_dim_name, sub_col = self._get_next_segment_column_after(df_ref_current, segment_dim_name)
             lr_col, pd_col, lgd_col = self._get_methodology_columns(df_ref_current)
             model_cols = [c for c in (lr_col, pd_col, lgd_col) if c is not None]
             if segment_col:
-                dup = df_ref_current[[segment_col] + model_cols].drop_duplicates() if model_cols else df_ref_current[[segment_col]].drop_duplicates()
+                dup_cols = [segment_col] + ([sub_col] if sub_col else []) + model_cols
+                dup = df_ref_current[dup_cols].drop_duplicates()
                 for _, row in dup.iterrows():
-                    seg = self._normalize_segment_display(row.get(segment_col))
+                    parent_seg = self._normalize_segment_display(row.get(segment_col))
+                    sub_seg = self._normalize_segment_display(row.get(sub_col)) if sub_col else None
                     meth = self._methodology_from_row(row, lr_col, pd_col, lgd_col)
-                    segment_methodology.append({"segment": seg, "methodology": meth})
-                print("[hanmi_acl_report] segmentMethodology: dimension={}, ref rows={}, distinct={}, output rows={}".format(
-                    segment_dim_name or segment_col, len(df_ref_current), len(dup), len(segment_methodology)))
+                    row_out = {
+                        "parentSegment": parent_seg,
+                        "subSegment": sub_seg,
+                        "segment": sub_seg if sub_seg else parent_seg,
+                        "methodology": meth,
+                    }
+                    segment_methodology.append(row_out)
+                print(
+                    "[hanmi_acl_report] segmentMethodology: dimension={}, subDimension={}, ref rows={}, distinct={}, output rows={}".format(
+                        segment_dim_name or segment_col,
+                        sub_dim_name or (sub_col if sub_col else ""),
+                        len(df_ref_current),
+                        len(dup),
+                        len(segment_methodology),
+                    )
+                )
             else:
                 all_cols = list(df_ref_current.columns)
                 print("[hanmi_acl_report] segmentMethodology: SKIP - no segment dimension found (ref_cols={})".format(all_cols[:30]))
@@ -1231,6 +1449,20 @@ class Model:
                     if total_coll_reserve:
                         for r in collectively_by_methodology:
                             r["pctOfEvaluationType"] = round(100.0 * r["totalReserve"] / total_coll_reserve, 2)
+                    if collectively_by_methodology:
+                        tot_ac = sum(r["amortizedCost"] for r in collectively_by_methodology)
+                        tot_q = sum(r["quantitativeReserve"] for r in collectively_by_methodology)
+                        tot_qual = sum(r["qualitativeReserve"] for r in collectively_by_methodology)
+                        tot_res = sum(r["totalReserve"] for r in collectively_by_methodology)
+                        collectively_by_methodology.append({
+                            "methodology": "Total pooled",
+                            "amortizedCost": round(tot_ac, 2),
+                            "quantitativeReserve": round(tot_q, 2),
+                            "qualitativeReserve": round(tot_qual, 2),
+                            "totalReserve": round(tot_res, 2),
+                            "pctOfEvaluationType": 100.0,
+                            "rowType": "total",
+                        })
             else:
                 print("[hanmi_acl_report] collectivelyByMethodology: SKIP - id_res={}, id_ref={}, asc_col={}".format(
                     bool(id_res), bool(id_ref), bool(asc_col)))
@@ -1273,8 +1505,12 @@ class Model:
                     "macroBaseAsOfDate": asof,
                 })
         macroeconomic_baseline_wide = self._build_macroeconomic_baseline_wide(macroeconomic_baseline, quarter_labels_chrono)
-        print("[hanmi_acl_report] macro: baseline rows={}, wide columns={}".format(
-            len(macroeconomic_baseline), len(macroeconomic_baseline_wide.get("quarterLabels") or [])))
+        macroeconomic_baseline_matrix = self._build_macroeconomic_baseline_matrix(macroeconomic_baseline, quarter_labels_chrono)
+        print("[hanmi_acl_report] macro: baseline rows={}, wide columns={}, matrix vars={}".format(
+            len(macroeconomic_baseline),
+            len(macroeconomic_baseline_wide.get("quarterLabels") or []),
+            len(macroeconomic_baseline_matrix.get("variables") or []),
+        ))
 
         for analysis_id, quarter_label in quarters_for_tables:
             if not analysis_id:
@@ -1292,16 +1528,20 @@ class Model:
                 print("[hanmi_acl_report] quantitativeLossRates: analysisId={} SKIP - id_res={}, id_ref={}, segment_col={}".format(
                     analysis_id, bool(id_res), bool(id_ref), bool(seg_col)))
                 continue
+            sub_dim, sub_col = self._get_next_segment_column_after(df_ref, seg_dim)
             left_on, right_on = self._join_keys_and_log(df_res, df_ref, "result", "ref", analysis_id)
             if left_on is None:
                 continue
-            ref_sub = df_ref[right_on + [seg_col]].drop_duplicates()
+            ref_cols = right_on + [seg_col] + ([sub_col] if sub_col else [])
+            ref_sub = df_ref[ref_cols].drop_duplicates()
             merged = df_res.merge(ref_sub, left_on=left_on, right_on=right_on, how="left")
             ac_col = self._find_column(merged, "amortizedCost")
             quant_col = self._resolve_unadjusted_reserve_column(merged)
             delta_col = self._resolve_loss_allowance_delta_column(merged)
             adj_flag_col = self._instrument_result_adjusted_column(merged)
-            for portfolio, grp in merged.groupby(seg_col, dropna=False):
+            group_keys = [seg_col, sub_col] if sub_col else [seg_col]
+
+            def _append_quant_row(parent_val, sub_val, grp):
                 ac = self._safe_sum(grp, "amortizedCost") if ac_col else 0.0
                 if adj_flag_col and adj_flag_col in merged.columns:
                     if delta_col and delta_col in grp.columns:
@@ -1316,15 +1556,37 @@ class Model:
                     else:
                         quant = self._safe_sum(grp, quant_col) if quant_col else 0.0
                 rate = (quant / ac * 100.0) if ac else None
-                seg_display = self._normalize_segment_display(portfolio)
-                quantitative_by_segment["main"].append({
-                    "segment": seg_display,
-                    "analysisId": analysis_id,
-                    "quarterLabel": quarter_label,
-                    "amortizedCost": round(ac, 2),
-                    "quantitativeReserve": round(quant, 2),
-                    "lossRatePct": round(rate, 4) if rate is not None else None,
-                })
+                parent_seg = self._normalize_segment_display(parent_val)
+                if sub_col:
+                    sub_seg = self._normalize_segment_display(sub_val)
+                    seg_key = "{} — {}".format(parent_seg, sub_seg)
+                    row_out = {
+                        "parentSegment": parent_seg,
+                        "subSegment": sub_seg,
+                        "segment": seg_key,
+                        "analysisId": analysis_id,
+                        "quarterLabel": quarter_label,
+                        "amortizedCost": round(ac, 2),
+                        "quantitativeReserve": round(quant, 2),
+                        "lossRatePct": round(rate, 4) if rate is not None else None,
+                    }
+                else:
+                    row_out = {
+                        "segment": parent_seg,
+                        "analysisId": analysis_id,
+                        "quarterLabel": quarter_label,
+                        "amortizedCost": round(ac, 2),
+                        "quantitativeReserve": round(quant, 2),
+                        "lossRatePct": round(rate, 4) if rate is not None else None,
+                    }
+                quantitative_by_segment["main"].append(row_out)
+
+            if sub_col:
+                for (parent_val, sub_val), grp in merged.groupby(group_keys, dropna=False):
+                    _append_quant_row(parent_val, sub_val, grp)
+            else:
+                for portfolio, grp in merged.groupby(seg_col, dropna=False):
+                    _append_quant_row(portfolio, None, grp)
         # P1: Add Q→Q and Y→Y deltas for loss rate and reserve
         self._add_quantitative_deltas(quantitative_by_segment["main"])
 
@@ -1483,8 +1745,11 @@ class Model:
             else:
                 row["quarterChange"] = None
 
+        assumptions_and_parameters = self._build_assumptions_and_parameters(report_dir, current_id, prior_id)
+
         out = {
             "reportMetadata": report_metadata,
+            "assumptionsAndParameters": assumptions_and_parameters,
             "segmentMethodology": segment_methodology,
             "collectivelyEvaluatedByMethodology": collectively_by_methodology,
             "quantitativeLossRatesBySegment": quantitative_by_segment,
@@ -1493,6 +1758,7 @@ class Model:
             "qualitativeReservesBySegment": qualitative_by_segment,
             "macroeconomicBaseline": macroeconomic_baseline,
             "macroeconomicBaselineWide": macroeconomic_baseline_wide,
+            "macroeconomicBaselineMatrix": macroeconomic_baseline_matrix,
             "individualAnalysis": individual_analysis,
             "unfundedBySegment": unfunded_by_segment,
             "unfundedTrend": unfunded_trend,
@@ -1598,8 +1864,10 @@ class Model:
         For **each** analysis in ``settings.analysisIds``, GET Impairment Studio adjustment details and write
         ``adjustment_details.json`` into the report dir (included in report_response_payload when enabled).
 
-        Output shape: ``{ currentAnalysisId, analysisIds, adjustments (current period list), byAnalysisId }``.
-        Legacy consumers that expect a top-level JSON array still work if they read ``adjustments``.
+        Output shape: ``{ currentAnalysisId, analysisIds, adjustments, byAnalysisId, analysisSummaries }``.
+        ``analysisSummaries`` lists each analysis with ``analysisName`` and ``reportingDate`` from
+        ``analysisDetails_{id}.json`` (for report labeling). Legacy consumers that expect a top-level
+        JSON array still work if they read ``adjustments``.
 
         API: ``{IMPAIRMENT_STUDIO_API_BASE}/adjustment/1.0/analyses/{id}/adjustmentdetails`` (Bearer JWT).
         Opt out: ``settings.fetchAdjustmentDetails`` = false.
@@ -1643,6 +1911,7 @@ class Model:
                 "analysisIds": [str(a) for a in analysis_ids],
                 "adjustments": [],
                 "byAnalysisId": {k: [] for k in by_analysis_id},
+                "analysisSummaries": [],
             }
             with open(out_path, "w", encoding="utf-8") as f:
                 json.dump(err_doc, f, indent=2)
@@ -1652,11 +1921,22 @@ class Model:
         cur_list = by_analysis_id.get(str(current_id))
         if cur_list is None:
             cur_list = []
+        analysis_summaries = []
+        for aid in analysis_ids:
+            meta = self._get_analysis_display_meta_from_details(report_dir, aid)
+            ql = self._get_quarter_label(report_dir, aid)
+            analysis_summaries.append({
+                "analysisId": str(aid),
+                "analysisName": (meta.get("analysisName") or ql or "").strip() or None,
+                "reportingDate": meta.get("reportingDate"),
+                "quarterLabel": ql,
+            })
         out_doc = {
             "currentAnalysisId": str(current_id),
             "analysisIds": [str(a) for a in analysis_ids],
             "adjustments": cur_list if isinstance(cur_list, list) else [],
             "byAnalysisId": {k: (v if isinstance(v, list) else []) for k, v in by_analysis_id.items()},
+            "analysisSummaries": analysis_summaries,
         }
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(out_doc, f, indent=2, default=str)
