@@ -383,6 +383,33 @@ class IOSession :
             else :
                 return {}
 
+    def _s3_download_batch(self, key_path_pairs):
+        """
+        Download many (s3_key, local_path) pairs. Uses ThreadPoolExecutor when tenant S3 is enabled.
+        Env HANMI_S3_DOWNLOAD_WORKERS (default 8); set to 1 for sequential if Cappy/thread issues appear.
+        """
+        if not key_path_pairs:
+            return
+        if not self._tenant_s3_inputs_enabled():
+            for sk, lp in key_path_pairs:
+                self._safeCopyFile(sk, lp)
+            return
+        workers = int(os.environ.get("HANMI_S3_DOWNLOAD_WORKERS", "8"))
+        if workers < 1:
+            workers = 1
+        if workers == 1:
+            for sk, lp in key_path_pairs:
+                self._downloadFile(sk, lp)
+            return
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _one(pair):
+            sk, lp = pair
+            self._downloadFile(sk, lp)
+
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            list(ex.map(_one, key_path_pairs))
+
     def _downloadDir(self, download_key, local_dir_path, raise_on_error=False) :
         try :
             # cont = self.cap_session.s3_list_bucket()
@@ -652,6 +679,14 @@ class IOSession :
             )
             self.logger.info(_s3_probe)
             print(_s3_probe)
+            _dw = int(os.environ.get("HANMI_S3_DOWNLOAD_WORKERS", "8"))
+            if _dw < 1:
+                _dw = 1
+            print(
+                "[getSourceInputFiles] S3 download workers={} (env HANMI_S3_DOWNLOAD_WORKERS; use 1 to force sequential)".format(
+                    _dw
+                )
+            )
 
             n_result_parquet = n_reporting_parquet = n_reference_parquet = 0
             n_analysis_details_ok = n_analysis_details_missing = 0
@@ -690,12 +725,14 @@ class IOSession :
                         prefix,
                         len(keys),
                     )
+                batch = []
                 for s3_key in parquet_keys:
                     local_path = os.path.join(local_dir, os.path.basename(s3_key))
-                    if self._tenant_s3_inputs_enabled():
-                        self._downloadFile(s3_key, local_path)
-                    else:
-                        self._safeCopyFile(s3_key, local_path)
+                    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                    batch.append((s3_key, local_path))
+                self._s3_download_batch(batch)
+                for s3_key in parquet_keys:
+                    local_path = os.path.join(local_dir, os.path.basename(s3_key))
                     input_files.update({os.path.splitext(os.path.basename(s3_key))[0]: local_path})
 
             # Download instrumentReporting: output/instrumentReporting/analysisidentifier={id}/ (parquet files directly under, no extra partition)
@@ -718,12 +755,12 @@ class IOSession :
                         prefix,
                         len(keys),
                     )
+                batch = []
                 for s3_key in parquet_keys:
                     local_path = os.path.join(local_dir, os.path.basename(s3_key))
-                    if self._tenant_s3_inputs_enabled():
-                        self._downloadFile(s3_key, local_path)
-                    else:
-                        self._safeCopyFile(s3_key, local_path)
+                    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                    batch.append((s3_key, local_path))
+                self._s3_download_batch(batch)
 
             # Download instrumentReference: output/instrumentReference/analysisidentifier={id}/ (partitioned by portfolioidentifier=.../; get all parquet from all subfolders)
             instrument_reference_paths = source_input_directory.get("instrumentReference") or []
@@ -745,15 +782,14 @@ class IOSession :
                         prefix,
                         len(keys),
                     )
+                batch = []
                 for s3_key in parquet_keys:
                     # Preserve subpath under analysisidentifier={id}/ to avoid overwriting (e.g. portfolioidentifier=CRE/part-*.parquet)
                     rel = s3_key[len(prefix):] if s3_key.startswith(prefix) else os.path.basename(s3_key)
                     local_path = os.path.join(local_dir, rel.replace("/", os.sep))
                     os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                    if self._tenant_s3_inputs_enabled():
-                        self._downloadFile(s3_key, local_path)
-                    else:
-                        self._safeCopyFile(s3_key, local_path)
+                    batch.append((s3_key, local_path))
+                self._s3_download_batch(batch)
 
             report_dir = self.local_directories.get("outputPaths", {}).get("report")
             if report_dir:
@@ -812,9 +848,11 @@ class IOSession :
                             n_macro_parquet += nm
                             if idx < len(per_analysis):
                                 per_analysis[idx]["macro_parquet"] = nm
+                            batch = []
                             for s3_key in parquet_keys:
                                 local_path = os.path.join(local_dir, os.path.basename(s3_key))
-                                self._downloadFile(s3_key, local_path)
+                                batch.append((s3_key, local_path))
+                            self._s3_download_batch(batch)
                             break
                     if not parquet_keys:
                         print("[getSourceInputFiles] macro: no parquet at input/.../asofdate=.../scenarioidentifier=BASE/")

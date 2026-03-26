@@ -144,6 +144,7 @@ class Model:
             self.proxy_cap_session = Cappy(**proxy_credentials, errors='log')
         # When settings.returnReportsInResponse is true, run() sets this to {"reports": {filename: object, ...}} for API responses.
         self.report_response_payload = None
+        self._parquet_load_cache = {}
 
     def _is_library_mode(self):
         """True when settings.libraryMode — importable runs: no S3 uploads, no zip, no log upload."""
@@ -151,6 +152,7 @@ class Model:
 
     def run(self):
         print("[Model run] START")
+        self._parquet_load_cache.clear()
         self.logger.info(f'Running model: {self.model_run_parameters.name}')
 
         print("[Model run] Step 1: List S3 folders")
@@ -594,6 +596,9 @@ class Model:
 
     def _load_parquet_for_analysis(self, category, analysis_id, filter_summary=False):
         """Load all parquet under that category dir for one analysis_id. If filter_summary, filter to scenarioIdentifier=Summary."""
+        cache_key = (category, str(analysis_id), bool(filter_summary))
+        if cache_key in self._parquet_load_cache:
+            return self._parquet_load_cache[cache_key]
         io = self.io_session
         input_paths = (io.local_directories.get("inputPaths") or {}).get(category) or []
         analysis_ids = io.model_run_parameters.settings.get("analysisIds", []) or []
@@ -604,11 +609,13 @@ class Model:
                 idx = i
                 break
         if idx is None or idx >= len(input_paths):
+            self._parquet_load_cache[cache_key] = None
             return None
         load_dir = input_paths[idx]
         files = glob.glob(os.path.join(load_dir, "**", "*.parquet"), recursive=True)
         if not files:
             print("[_load_parquet] no parquet in {} (category={}, analysisId={})".format(load_dir, category, analysis_id))
+            self._parquet_load_cache[cache_key] = None
             return None
         dfs = []
         pruned_files = 0
@@ -626,6 +633,7 @@ class Model:
             except Exception as e:
                 self.logger.warning("Failed to read %s: %s", f, e)
         if not dfs:
+            self._parquet_load_cache[cache_key] = None
             return None
         if pruned_files:
             print(
@@ -642,6 +650,7 @@ class Model:
         out = pd.concat(dfs, ignore_index=True)
         if filter_summary:
             out = self._filter_summary_scenario(out)
+        self._parquet_load_cache[cache_key] = out
         return out
 
     def _get_reporting_date_from_analysis_details(self, report_dir, analysis_id):
