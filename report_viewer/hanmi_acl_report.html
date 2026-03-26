@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ACL Quarterly Report</title>
+  <style>
+    :root {
+      --ink: #1a1a1a;
+      --muted: #5c5c5c;
+      --border: #c8c8c8;
+      --head: #e8eef4;
+      --accent: #0b3d6d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: Georgia, "Times New Roman", serif;
+      color: var(--ink);
+      line-height: 1.45;
+      margin: 0;
+      padding: 1.5rem 1rem 3rem;
+      background: #f5f5f5;
+    }
+    .wrap {
+      max-width: 72rem;
+      margin: 0 auto;
+      background: #fff;
+      padding: 2rem 2.25rem;
+      box-shadow: 0 1px 4px rgba(0,0,0,.08);
+    }
+    h1 {
+      font-size: 1.35rem;
+      font-weight: 600;
+      margin: 0 0 0.35rem;
+      color: var(--accent);
+    }
+    .sub {
+      font-size: 0.9rem;
+      color: var(--muted);
+      margin-bottom: 1.75rem;
+    }
+    h2 {
+      font-size: 1.05rem;
+      margin: 2rem 0 0.75rem;
+      padding-bottom: 0.25rem;
+      border-bottom: 2px solid var(--accent);
+      color: var(--accent);
+    }
+    h3 {
+      font-size: 0.95rem;
+      margin: 1.25rem 0 0.5rem;
+      color: #333;
+    }
+    .caption {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin: 0 0 0.5rem;
+      font-family: system-ui, Segoe UI, sans-serif;
+    }
+    .narrative {
+      font-size: 0.9rem;
+      margin: 0.5rem 0 1rem;
+      color: #333;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.75rem;
+      font-family: system-ui, Segoe UI, sans-serif;
+    }
+    th, td {
+      border: 1px solid var(--border);
+      padding: 0.3rem 0.4rem;
+      text-align: right;
+      vertical-align: top;
+    }
+    th:first-child, td:first-child { text-align: left; }
+    thead th {
+      background: var(--head);
+      font-weight: 600;
+    }
+    tbody tr:nth-child(even) { background: #fafafa; }
+    .table-pdf thead tr.subhead th {
+      font-size: 0.68rem;
+      font-weight: 600;
+      line-height: 1.2;
+    }
+    .table-pdf thead tr.superhead th {
+      background: #d8e4f0;
+      font-size: 0.72rem;
+    }
+    .toolbar {
+      font-family: system-ui, Segoe UI, sans-serif;
+      font-size: 0.85rem;
+      margin-bottom: 1.5rem;
+      padding: 0.75rem 1rem;
+      background: #eef3f8;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+    }
+    .toolbar label { margin-right: 0.5rem; }
+    .toolbar input[type="file"] { font-size: 0.8rem; }
+    .toolbar .hint { color: var(--muted); margin-top: 0.35rem; font-size: 0.78rem; }
+    .toolbar code { font-size: 0.85em; }
+    .empty { color: var(--muted); font-style: italic; font-size: 0.9rem; }
+    .mono { font-family: ui-monospace, Consolas, monospace; font-size: 0.78rem; }
+    @media print {
+      body { background: #fff; padding: 0; }
+      .toolbar { display: none; }
+      .wrap { box-shadow: none; padding: 0; max-width: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="toolbar">
+      <label for="jsonFile">Load data file</label>
+      <input type="file" id="jsonFile" accept=".json,application/json" />
+      <div class="hint">
+        Default file (when served over HTTP): <code id="defaultFileLabel"></code>.
+        Override with <code>?file=your.json</code>.
+        <code>file://</code> may block automatic load; use the file picker or a local server.
+      </div>
+    </div>
+
+    <div id="root"></div>
+  </div>
+
+  <script>
+(function () {
+  'use strict';
+
+  var DEFAULT_DATA_FILE = '../outputs/response_1774541356631.json';
+
+  function dataFileFromQuery() {
+    try {
+      var q = new URLSearchParams(window.location.search).get('file');
+      return (q && q.replace(/^\s+|\s+$/g, '')) || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  var DATA_FILE = dataFileFromQuery() || DEFAULT_DATA_FILE;
+  document.getElementById('defaultFileLabel').textContent = DATA_FILE;
+
+  /** Coerce list fields from JSON (avoids .reduce / .forEach throws when API sends {} or null). */
+  function asArray(val) {
+    if (val == null) return [];
+    return Array.isArray(val) ? val : [];
+  }
+
+  function unwrapNestedPayload(obj) {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj;
+    var keys = Object.keys(obj);
+    if (keys.length === 1 && obj[keys[0]] && typeof obj[keys[0]] === 'object' && !Array.isArray(obj[keys[0]])) {
+      var inner = obj[keys[0]];
+      if (inner.quarterly_summary_report != null || inner.hanmi_acl_quarterly_report != null) {
+        return inner;
+      }
+    }
+    return obj;
+  }
+
+  function normalizeReportPayload(raw) {
+    if (!raw || typeof raw !== 'object') return { rollforward: null, exhibits: null, adjustments: null };
+    if (raw.rollforward != null || raw.exhibits != null) {
+      return {
+        rollforward: raw.rollforward,
+        exhibits: raw.exhibits,
+        adjustments: raw.adjustments,
+      };
+    }
+    var inner = raw.data && typeof raw.data === 'object' ? raw.data : raw;
+    inner = unwrapNestedPayload(inner);
+    var rep = inner.reports && typeof inner.reports === 'object' ? inner.reports : null;
+    if (rep) {
+      return {
+        rollforward: rep['quarterly_summary_report.json'] || rep.quarterly_summary_report,
+        exhibits: rep['hanmi_acl_quarterly_report.json'] || rep.hanmi_acl_quarterly_report,
+        adjustments: rep['adjustment_details.json'] || rep.adjustment_details,
+      };
+    }
+    inner = unwrapNestedPayload(inner);
+    var fromResponse = inner.response || inner.payload || inner.result || inner.body;
+    if (fromResponse && typeof fromResponse === 'object') {
+      inner = Object.assign({}, inner, unwrapNestedPayload(fromResponse));
+    }
+    return {
+      rollforward: inner.quarterly_summary_report,
+      exhibits: inner.hanmi_acl_quarterly_report,
+      adjustments: inner.adjustment_details,
+    };
+  }
+
+  function parseQuarterLabel(s) {
+    var m = String(s || '').trim().match(/Q\s*(\d)\s*(\d{4})/i);
+    if (!m) return { y: 0, q: 0 };
+    return { q: parseInt(m[1], 10), y: parseInt(m[2], 10) };
+  }
+
+  function compareQuarterLabels(a, b) {
+    var A = parseQuarterLabel(a);
+    var B = parseQuarterLabel(b);
+    if (A.y !== B.y) return A.y - B.y;
+    return A.q - B.q;
+  }
+
+  function sortQuarterLabels(arr) {
+    return arr.slice().sort(compareQuarterLabels);
+  }
+
+  /** Display like PDF: Q4 '24 */
+  function formatQuarterShort(label) {
+    var p = parseQuarterLabel(label);
+    if (!p.y) return String(label);
+    var yy = String(p.y).slice(-2);
+    return 'Q' + p.q + " '" + yy;
+  }
+
+  function fmtMoney(n) {
+    if (n == null || n === '' || (typeof n === 'number' && !isFinite(n))) return '—';
+    return Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  /** PDF tables use thousands for dollar columns */
+  function fmtThousands(n) {
+    if (n == null || n === '' || (typeof n === 'number' && !isFinite(n))) return '—';
+    return (Number(n) / 1000).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  }
+
+  /** Ratios in rollforward JSON are decimals (e.g. 0.0087 = 0.87%) */
+  function fmtRatioAsPct(n) {
+    if (n == null || n === '' || (typeof n === 'number' && !isFinite(n))) return '—';
+    return (Number(n) * 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 }) + '%';
+  }
+
+  /** Model stores lossRatePct / qualitativeRatePct as percent already (e.g. 0.69 = 0.69%) */
+  function fmtLossRatePct(n) {
+    if (n == null || n === '' || (typeof n === 'number' && !isFinite(n))) return '—';
+    return Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 }) + '%';
+  }
+
+  /** Difference between two stored percent rates (percentage points) */
+  function fmtPctPointDelta(a, b) {
+    if (a == null || b == null || !isFinite(Number(a)) || !isFinite(Number(b))) return '—';
+    var d = Number(a) - Number(b);
+    var s = d.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (d < 0) return '(' + s.replace('-', '') + ')';
+    return s;
+  }
+
+  function fmtThousandsDelta(a, b) {
+    if (a == null || b == null || !isFinite(Number(a)) || !isFinite(Number(b))) return '—';
+    var d = (Number(a) - Number(b)) / 1000;
+    var s = Math.round(d).toLocaleString();
+    if (d < 0) return '(' + s.replace('-', '') + ')';
+    return s;
+  }
+
+  function fmtNum(n) {
+    if (n == null || n === '' || (typeof n === 'number' && !isFinite(n))) return '—';
+    return Number(n).toLocaleString(undefined, { maximumFractionDigits: 6 });
+  }
+
+  function esc(s) {
+    if (s == null) return '';
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function sortSegmentsForPdf(segments) {
+    var list = segments.slice();
+    var totals = list.filter(function (s) { return /^total/i.test(String(s).trim()); });
+    var rest = list.filter(function (s) { return !/^total/i.test(String(s).trim()); }).sort();
+    return rest.concat(totals.sort());
+  }
+
+  /**
+   * PDF 1.1.3: rows = segments, columns = 3 balance + 2 deltas + 3 LR + 2 LR deltas + 3 reserve + 2 res deltas.
+   * Uses up to the last three chronological quarters in the data.
+   */
+  function buildLossRatesPdfTable(rows, title) {
+    if (!Array.isArray(rows) || !rows.length) {
+      return '<p class="empty">No rows.</p>';
+    }
+    var allQ = {};
+    rows.forEach(function (r) {
+      if (r.quarterLabel) allQ[r.quarterLabel] = true;
+    });
+    var qs = sortQuarterLabels(Object.keys(allQ));
+    var q3 = qs.length >= 3 ? qs.slice(-3) : qs;
+    if (!q3.length) return '<p class="empty">No quarter labels.</p>';
+
+    var grid = {};
+    rows.forEach(function (r) {
+      var seg = String(r.segment == null ? '' : r.segment);
+      if (!grid[seg]) grid[seg] = {};
+      var q = String(r.quarterLabel || '');
+      grid[seg][q] = {
+        amortizedCost: r.amortizedCost,
+        lossRatePct: r.lossRatePct,
+        quantitativeReserve: r.quantitativeReserve,
+        qualitativeReserve: r.qualitativeReserve,
+        qualitativeRatePct: r.qualitativeRatePct,
+      };
+    });
+
+    var segs = sortSegmentsForPdf(Object.keys(grid));
+
+    var q1 = q3[0];
+    var q2 = q3.length >= 2 ? q3[1] : null;
+    var q3c = q3.length >= 3 ? q3[2] : null;
+
+    var isQual = !rows.some(function (r) {
+      return r.lossRatePct != null && r.lossRatePct !== '';
+    });
+
+    var h = '';
+    h += '<h3>' + esc(title) + '</h3>';
+    h += '<p class="caption">(Dollars in thousands)</p>';
+    h += '<table class="table-pdf"><thead>';
+    h += '<tr class="superhead">';
+    h += '<th rowspan="2">Segment</th>';
+    h += '<th colspan="5">Total pooled balance</th>';
+    h += '<th colspan="5">Loss rates</th>';
+    h += '<th colspan="5">' + (isQual ? 'Qualitative reserve' : 'Quantitative reserve') + '</th>';
+    h += '</tr>';
+    h += '<tr class="subhead">';
+    [q1, q2, q3c].forEach(function (q) {
+      h += '<th>' + esc(q ? formatQuarterShort(q) : '—') + '</th>';
+    });
+    h += '<th>Incr./Decr.<br />(Y to Y)</th><th>Incr./Decr.<br />(Q to Q)</th>';
+    [q1, q2, q3c].forEach(function (q) {
+      h += '<th>' + esc(q ? formatQuarterShort(q) : '—') + '</th>';
+    });
+    h += '<th>Incr./Decr.<br />(Q to Q)</th><th>Incr./Decr.<br />(Y to Y)</th>';
+    [q1, q2, q3c].forEach(function (q) {
+      h += '<th>' + esc(q ? formatQuarterShort(q) : '—') + '</th>';
+    });
+    h += '<th>Incr./Decr.<br />(Q to Q)</th><th>Incr./Decr.<br />(Y to Y)</th>';
+    h += '</tr></thead><tbody>';
+
+    segs.forEach(function (seg) {
+      var g = grid[seg] || {};
+      var c1 = g[q1] || {};
+      var c2 = q2 ? (g[q2] || {}) : {};
+      var c3 = q3c ? (g[q3c] || {}) : {};
+
+      var b1 = c1.amortizedCost;
+      var b2 = q2 ? c2.amortizedCost : null;
+      var b3 = q3c ? c3.amortizedCost : null;
+
+      var r1 = isQual ? c1.qualitativeRatePct : c1.lossRatePct;
+      var r2 = q2 ? (isQual ? c2.qualitativeRatePct : c2.lossRatePct) : null;
+      var r3 = q3c ? (isQual ? c3.qualitativeRatePct : c3.lossRatePct) : null;
+
+      var res1 = isQual ? c1.qualitativeReserve : c1.quantitativeReserve;
+      var res2 = q2 ? (isQual ? c2.qualitativeReserve : c2.quantitativeReserve) : null;
+      var res3 = q3c ? (isQual ? c3.qualitativeReserve : c3.quantitativeReserve) : null;
+
+      h += '<tr><td>' + esc(seg) + '</td>';
+      h += '<td>' + fmtThousands(b1) + '</td>';
+      h += '<td>' + (q2 ? fmtThousands(b2) : '—') + '</td>';
+      h += '<td>' + (q3c ? fmtThousands(b3) : '—') + '</td>';
+      h += '<td>' + (q3c && q1 ? fmtThousandsDelta(b3, b1) : '—') + '</td>';
+      h += '<td>' + (q3c && q2 ? fmtThousandsDelta(b3, b2) : '—') + '</td>';
+
+      h += '<td>' + fmtLossRatePct(r1) + '</td>';
+      h += '<td>' + (q2 ? fmtLossRatePct(r2) : '—') + '</td>';
+      h += '<td>' + (q3c ? fmtLossRatePct(r3) : '—') + '</td>';
+      h += '<td>' + (q3c && q2 ? fmtPctPointDelta(r3, r2) : '—') + '</td>';
+      h += '<td>' + (q3c && q1 ? fmtPctPointDelta(r3, r1) : '—') + '</td>';
+
+      h += '<td>' + fmtThousands(res1) + '</td>';
+      h += '<td>' + (q2 ? fmtThousands(res2) : '—') + '</td>';
+      h += '<td>' + (q3c ? fmtThousands(res3) : '—') + '</td>';
+      h += '<td>' + (q3c && q2 ? fmtThousandsDelta(res3, res2) : '—') + '</td>';
+      h += '<td>' + (q3c && q1 ? fmtThousandsDelta(res3, res1) : '—') + '</td>';
+      h += '</tr>';
+    });
+
+    h += '</tbody></table>';
+    return h;
+  }
+
+  /** Qualitative: long rows with qualitativeReserve / qualitativeRatePct per segment+quarter */
+  function buildQualitativeLongFromMain(mainArr, quarterHints) {
+    if (!Array.isArray(mainArr)) return [];
+    var hasQuarter = mainArr.some(function (r) { return r.quarterLabel; });
+    if (hasQuarter) {
+      return mainArr.map(function (r) {
+        return {
+          segment: r.segment,
+          quarterLabel: r.quarterLabel,
+          amortizedCost: r.amortizedCost,
+          qualitativeReserve: r.qualitativeReserve,
+          qualitativeRatePct: r.qualitativeRatePct,
+        };
+      });
+    }
+    if (quarterHints && quarterHints.length) {
+      var qLast = quarterHints[quarterHints.length - 1];
+      return mainArr.map(function (r) {
+        return {
+          segment: r.segment,
+          quarterLabel: qLast,
+          amortizedCost: null,
+          qualitativeReserve: r.qualitativeReserve,
+          qualitativeRatePct: r.qualitativeRatePct,
+        };
+      });
+    }
+    return [];
+  }
+
+  function buildNetChargeOffsQuarterlyTable(nco) {
+    if (!Array.isArray(nco) || !nco.length) return '<p class="empty">No rows.</p>';
+    var qs = sortQuarterLabels(
+      Object.keys(
+        nco.reduce(function (acc, r) {
+          if (r.quarterLabel) acc[r.quarterLabel] = true;
+          return acc;
+        }, {})
+      )
+    );
+    var grid = {};
+    nco.forEach(function (r) {
+      var seg = String(r.segment == null ? '' : r.segment);
+      if (!grid[seg]) grid[seg] = {};
+      grid[seg][r.quarterLabel] = r.netChargeOffs;
+    });
+    var segs = sortSegmentsForPdf(Object.keys(grid));
+    var h = '<p class="caption">($ in thousands)</p>';
+    h += '<table class="table-pdf"><thead><tr><th>Segment</th>';
+    qs.forEach(function (q) {
+      h += '<th>' + esc(formatQuarterShort(q)) + '</th>';
+    });
+    h += '</tr></thead><tbody>';
+    segs.forEach(function (seg) {
+      h += '<tr><td>' + esc(seg) + '</td>';
+      qs.forEach(function (q) {
+        var v = grid[seg][q];
+        h += '<td>' + (v == null ? '—' : fmtThousands(v)) + '</td>';
+      });
+      h += '</tr>';
+    });
+    h += '</tbody></table>';
+    return h;
+  }
+
+  function buildNetChargeOffsAnnualTable(annual) {
+    if (!Array.isArray(annual) || !annual.length) return '';
+    var yearsSet = {};
+    annual.forEach(function (r) {
+      if (r.year != null) yearsSet[String(r.year)] = true;
+      var yv = r.years || r.yearTotals;
+      if (yv && typeof yv === 'object') {
+        Object.keys(yv).forEach(function (k) { yearsSet[k] = true; });
+      }
+    });
+    var years = Object.keys(yearsSet).sort();
+    if (!years.length) return '';
+
+    var grid = {};
+    annual.forEach(function (r) {
+      var seg = String(r.segment == null ? '' : r.segment);
+      if (!grid[seg]) grid[seg] = {};
+      if (r.year != null && r.netChargeOffs != null) {
+        grid[seg][String(r.year)] = r.netChargeOffs;
+      }
+      var yv = r.years || r.yearTotals;
+      if (yv && typeof yv === 'object') {
+        Object.keys(yv).forEach(function (y) {
+          grid[seg][y] = yv[y];
+        });
+      }
+    });
+
+    var h = '<h3>Annual net loss trends by segment</h3>';
+    h += '<p class="caption">($ in thousands)</p>';
+    h += '<table class="table-pdf"><thead><tr><th>Segment</th>';
+    years.forEach(function (y) { h += '<th>' + esc(y) + '</th>'; });
+    h += '</tr></thead><tbody>';
+
+    sortSegmentsForPdf(Object.keys(grid)).forEach(function (seg) {
+      h += '<tr><td>' + esc(seg) + '</td>';
+      years.forEach(function (y) {
+        var v = grid[seg][y];
+        h += '<td>' + (v == null ? '—' : fmtThousands(v)) + '</td>';
+      });
+      h += '</tr>';
+    });
+    h += '</tbody></table>';
+    return h;
+  }
+
+  function renderMacroWideByVariable(macro) {
+    if (!Array.isArray(macro) || !macro.length) return '<p class="empty">No macroeconomic rows.</p>';
+    var byVar = {};
+    macro.forEach(function (r) {
+      var vn = r.variableName || '(unnamed)';
+      if (!byVar[vn]) byVar[vn] = [];
+      byVar[vn].push(r);
+    });
+    var html = '';
+    html += '<p class="caption">Moody\'s Baseline — values by value date (source grid may differ from PDF forecast matrix)</p>';
+    Object.keys(byVar).sort().forEach(function (name) {
+      var rows = byVar[name].slice().sort(function (a, b) {
+        return String(a.valueDate).localeCompare(String(b.valueDate));
+      });
+      html += '<h3>' + esc(name) + '</h3>';
+      html += '<table class="table-pdf"><thead><tr><th>Value date</th><th>Value</th></tr></thead><tbody>';
+      rows.forEach(function (r) {
+        html += '<tr><td>' + esc(r.valueDate) + '</td><td>' + fmtNum(r.value) + '</td></tr>';
+      });
+      html += '</tbody></table>';
+    });
+    return html;
+  }
+
+  function sectionTitleRollforward(type) {
+    var map = {
+      changesToAcl: 'Rollforward detail',
+      collectivelyEvaluated: 'Collectively evaluated — pool summary',
+      individuallyEvaluated: 'Individually evaluated — pool summary',
+      totalReserveRequirements: 'Total reserve requirements',
+      unfundedCommitmentLiabilities: 'Unfunded commitment liabilities',
+      qtdCreditLossExpense: 'Quarter-to-date credit loss expense',
+    };
+    return map[type] || type;
+  }
+
+  function renderRollforwardSection(sec) {
+    if (!sec || typeof sec !== 'object') return '';
+    var t = sec.type;
+    var rows = [];
+    function row(label, val) {
+      rows.push('<tr><td>' + esc(label) + '</td><td>' + val + '</td></tr>');
+    }
+    if (t === 'changesToAcl') {
+      row('Beginning ACL', fmtMoney(sec.beginningACL));
+      row('Charge-offs', fmtMoney(sec.chargeOffs));
+      row('Recoveries', fmtMoney(sec.recoveries));
+      row('Provision', fmtMoney(sec.provision));
+      row('Ending ACL', fmtMoney(sec.endingACL));
+    } else if (t === 'collectivelyEvaluated') {
+      row('Collectively evaluated exposure', fmtMoney(sec.collectivelyEvaluatedExposure));
+      row('Quantitative reserve', fmtMoney(sec.quantitativeReserveAmount));
+      row('Qualitative reserve', fmtMoney(sec.qualitativeReserveAmount));
+      row('Total collective reserve', fmtMoney(sec.totalCollectiveReserveAmount));
+      row('Quantitative reserve / exposure', fmtRatioAsPct(sec.quantitativeReserveToExposure));
+      row('Qualitative reserve / exposure', fmtRatioAsPct(sec.qualitativeReserveToExposure));
+      row('Total collective reserve / exposure', fmtRatioAsPct(sec.totalCollectiveReserveToExposure));
+    } else if (t === 'individuallyEvaluated') {
+      row('Individually evaluated exposure', fmtMoney(sec.individuallyEvaluatedExposure));
+      row('Individual reserve', fmtMoney(sec.individualReserveAmount));
+      row('Individual reserve / exposure', fmtRatioAsPct(sec.individualReserveToExposure));
+    } else if (t === 'totalReserveRequirements') {
+      row('Total exposure', fmtMoney(sec.totalExposure));
+      row('Total reserves', fmtMoney(sec.totalReserves));
+      row('Total reserves / total exposure', fmtRatioAsPct(sec.totalReservesToTotalExposure));
+    } else if (t === 'unfundedCommitmentLiabilities') {
+      row('Unfunded exposure', fmtMoney(sec.unfundedExposure));
+      row('Unfunded reserve', fmtMoney(sec.unfundedReserveAmount));
+      row('Total unfunded exposure', fmtMoney(sec.totalUnfundedExposure));
+    } else if (t === 'qtdCreditLossExpense') {
+      row('Provision expense', fmtMoney(sec.provisionExpense));
+      row('Unfunded provision expense', fmtMoney(sec.unfundedProvisionExpense));
+      row('Total QTD credit loss expense', fmtMoney(sec.totalQtdCreditLossExpense));
+    } else {
+      rows.push('<tr><td colspan="2" class="mono">' + esc(JSON.stringify(sec)) + '</td></tr>');
+    }
+    return (
+      '<h3>' + esc(sectionTitleRollforward(t)) + '</h3>' +
+      '<table><thead><tr><th>Item</th><th style="width:40%">Value</th></tr></thead><tbody>' +
+      rows.join('') + '</tbody></table>'
+    );
+  }
+
+  function renderObjectTable(obj, title) {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return '';
+    var keys = Object.keys(obj);
+    if (!keys.length) return '';
+    var h = '<h3>' + esc(title) + '</h3><table><tbody>';
+    keys.forEach(function (k) {
+      h += '<tr><td>' + esc(k) + '</td><td class="mono">' + esc(JSON.stringify(obj[k])) + '</td></tr>';
+    });
+    h += '</tbody></table>';
+    return h;
+  }
+
+  function renderAdjustments(adj) {
+    if (adj == null) return '';
+    if (Array.isArray(adj)) {
+      if (!adj.length) return '<h2>Qualitative adjustment detail (system)</h2><p class="empty">Empty.</p>';
+      var keys = Object.keys(adj[0] || {}).sort();
+      var h = '<h2>Qualitative adjustment detail (system)</h2><table><thead><tr>';
+      keys.forEach(function (k) { h += '<th>' + esc(k) + '</th>'; });
+      h += '</tr></thead><tbody>';
+      adj.forEach(function (row) {
+        h += '<tr>';
+        keys.forEach(function (k) {
+          var v = row[k];
+          h += '<td class="mono">' + esc(typeof v === 'object' ? JSON.stringify(v) : v) + '</td>';
+        });
+        h += '</tr>';
+      });
+      h += '</tbody></table>';
+      return h;
+    }
+    if (typeof adj === 'object') {
+      return '<h2>Qualitative adjustment detail (system)</h2><pre class="mono">' + esc(JSON.stringify(adj, null, 2)) + '</pre>';
+    }
+    return '';
+  }
+
+  function renderExhibits(h) {
+    if (!h || typeof h !== 'object') {
+      return { html: '<p class="empty">No exhibit content in this file.</p>', tailHtml: '', meta: {} };
+    }
+    var meta = h.reportMetadata || {};
+    var html = '';
+
+    var ql = h.quantitativeLossRatesBySegment || {};
+    var mainLoss = asArray(ql.main);
+    var quarterHints = sortQuarterLabels(
+      Object.keys(
+        mainLoss.reduce(function (acc, r) {
+          if (r && r.quarterLabel) acc[r.quarterLabel] = true;
+          return acc;
+        }, {})
+      )
+    );
+
+    html += '<h2>1.1 Quantitative component analysis</h2>';
+
+    html += '<h3>1.1.1 Segmentations and methodologies</h3>';
+    html += '<p class="narrative">The table below summarizes the quantitative methodologies selected for the period. Segment labels follow the source data.</p>';
+    if (Array.isArray(h.segmentMethodology) && h.segmentMethodology.length) {
+      html += '<table><thead><tr><th>Segments</th><th>Methodology</th></tr></thead><tbody>';
+      h.segmentMethodology.forEach(function (r) {
+        html += '<tr><td>' + esc(r.segment) + '</td><td>' + esc(r.methodology) + '</td></tr>';
+      });
+      html += '</tbody></table>';
+    } else html += '<p class="empty">No rows.</p>';
+
+    html += '<p class="narrative">Below is a summary of the allowance for pooled loans by methodology:</p>';
+    html += '<p class="caption">(dollars in thousands)</p>';
+    html += '<p class="caption"><strong>Collectively evaluated by methodology</strong></p>';
+    if (Array.isArray(h.collectivelyEvaluatedByMethodology) && h.collectivelyEvaluatedByMethodology.length) {
+      html += '<table><thead><tr><th>Collectively evaluated by methodology</th><th>Amortized cost</th>' +
+        '<th>Quantitative</th><th>Qualitative</th><th>Total reserve</th><th>% of evaluation type</th></tr></thead><tbody>';
+      h.collectivelyEvaluatedByMethodology.forEach(function (r) {
+        html += '<tr><td>' + esc(r.methodology) + '</td><td>' + fmtThousands(r.amortizedCost) + '</td><td>' +
+          fmtThousands(r.quantitativeReserve) + '</td><td>' + fmtThousands(r.qualitativeReserve) + '</td><td>' +
+          fmtThousands(r.totalReserve) + '</td><td>' + fmtNum(r.pctOfEvaluationType) + '%</td></tr>';
+      });
+      html += '</tbody></table>';
+    } else html += '<p class="empty">No rows.</p>';
+
+    html += '<h3>1.1.2 Assumptions and parameters</h3>';
+    html += '<p class="empty">Narrative and assumption tables are not included in the structured export; add text in the source document if needed.</p>';
+
+    html += '<h3>1.1.3 Loss rates</h3>';
+    html += '<p class="narrative">The following tables represent the weighted average quantitative reserve rates by segment for the periods indicated.</p>';
+    html += buildLossRatesPdfTable(mainLoss, 'Quantitative loss rates — main segments');
+
+    var cre = asArray(ql.creSubSegments);
+    if (cre.length) {
+      html += buildLossRatesPdfTable(cre, 'Quantitative loss rates — commercial real estate by sub-segment');
+    }
+
+    html += '<h3>Quarterly net loss trends by segment</h3>';
+    html += '<p class="narrative">The following table represents quarterly net loss trends by segment for the available periods.</p>';
+    html += buildNetChargeOffsQuarterlyTable(asArray(h.netChargeOffsQuarterly));
+
+    var ncoAnnual = asArray(h.netChargeOffsAnnual);
+    if (ncoAnnual.length) {
+      html += buildNetChargeOffsAnnualTable(ncoAnnual);
+    }
+
+    html += '<h2>1.2 Qualitative component analysis</h2>';
+    html += '<p class="narrative">The following tables represent weighted average qualitative reserve rates by segment where quarterly history is available.</p>';
+    var qrs = h.qualitativeReservesBySegment || {};
+    var qualMain = buildQualitativeLongFromMain(asArray(qrs.main), quarterHints);
+    if (qualMain.length) {
+      html += buildLossRatesPdfTable(qualMain, 'Qualitative reserve rates — main segments');
+    }
+    var qualCre = buildQualitativeLongFromMain(asArray(qrs.creSubSegments), quarterHints);
+    if (qualCre.length) {
+      html += buildLossRatesPdfTable(qualCre, 'Qualitative reserve rates — CRE sub-segments');
+    }
+
+    if (!qualMain.length && !qualCre.length) {
+      var qrsMainFlat = asArray(qrs.main);
+      var qrsCreFlat = asArray(qrs.creSubSegments);
+      if (qrsMainFlat.length || qrsCreFlat.length) {
+        html += '<h3>Qualitative reserves — by segment (point-in-time)</h3>';
+        html += '<p class="caption">Quarterly history not in file; showing current segment totals.</p>';
+        if (qrsMainFlat.length) {
+          html += '<table><thead><tr><th>Segment</th><th>Qualitative reserve</th><th>Qualitative rate</th></tr></thead><tbody>';
+          qrsMainFlat.forEach(function (r) {
+            html += '<tr><td>' + esc(r.segment) + '</td><td>' + fmtMoney(r.qualitativeReserve) + '</td><td>' +
+              fmtLossRatePct(r.qualitativeRatePct) + '</td></tr>';
+          });
+          html += '</tbody></table>';
+        }
+        if (qrsCreFlat.length) {
+          html += '<h4>CRE sub-segments</h4>';
+          html += '<table><thead><tr><th>Segment</th><th>Qualitative reserve</th><th>Qualitative rate</th></tr></thead><tbody>';
+          qrsCreFlat.forEach(function (r) {
+            html += '<tr><td>' + esc(r.segment) + '</td><td>' + fmtMoney(r.qualitativeReserve) + '</td><td>' +
+              fmtLossRatePct(r.qualitativeRatePct) + '</td></tr>';
+          });
+          html += '</tbody></table>';
+        }
+      } else {
+        html += '<p class="empty">No qualitative segment history in file.</p>';
+      }
+    }
+
+    if (h.qualitativeFactorsMatrix != null) {
+      html += '<h3>Qualitative factors matrix</h3><pre class="mono">' + esc(JSON.stringify(h.qualitativeFactorsMatrix, null, 2)) + '</pre>';
+    }
+    if (h.qualitativeAdjustmentByFactor != null) {
+      html += '<h3>Qualitative adjustment breakdown by factors</h3><pre class="mono">' + esc(JSON.stringify(h.qualitativeAdjustmentByFactor, null, 2)) + '</pre>';
+    }
+
+    html += '<h2>Moody\'s baseline — macroeconomic variables</h2>';
+    html += '<p class="narrative">The following tables reflect macroeconomic variable values from the source file (PDF layout is a forecast matrix by quarter).</p>';
+    html += renderMacroWideByVariable(asArray(h.macroeconomicBaseline));
+
+    html += '<h2>1.3 Individual component analysis</h2>';
+    if (Array.isArray(h.individualAnalysis) && h.individualAnalysis.length) {
+      html += '<table><thead><tr><th>Evaluation type</th><th>Amortized cost</th><th>Specific reserve</th><th>% of evaluation type</th></tr></thead><tbody>';
+      h.individualAnalysis.forEach(function (r) {
+        html += '<tr><td>' + esc(r.evaluationType) + '</td><td>' + fmtMoney(r.amortizedCost) + '</td><td>' +
+          fmtMoney(r.specificReserve) + '</td><td>' + fmtNum(r.pctOfType) + '%</td></tr>';
+      });
+      html += '</tbody></table>';
+    } else html += '<p class="empty">No rows.</p>';
+
+    html += '<h2>1.4 Unfunded commitment liability</h2>';
+    html += '<h3>Unfunded commitment — by segment</h3>';
+    if (Array.isArray(h.unfundedBySegment) && h.unfundedBySegment.length) {
+      html += '<table><thead><tr><th>Segment</th><th>Unfunded commitment (available credit)</th><th>Reserve</th></tr></thead><tbody>';
+      h.unfundedBySegment.forEach(function (r) {
+        html += '<tr><td>' + esc(r.segment) + '</td><td>' + fmtMoney(r.availableCredit) + '</td><td>' +
+          fmtMoney(r.reserve) + '</td></tr>';
+      });
+      html += '</tbody></table>';
+    } else html += '<p class="empty">No rows.</p>';
+
+    html += '<h3>Unfunded commitment — trend</h3>';
+    if (Array.isArray(h.unfundedTrend) && h.unfundedTrend.length) {
+      html += '<table><thead><tr><th>Quarter</th><th>Analysis ID</th><th>Required reserve</th><th>Total unfunded commitment</th></tr></thead><tbody>';
+      h.unfundedTrend.forEach(function (r) {
+        html += '<tr><td>' + esc(r.quarterLabel) + '</td><td>' + esc(r.analysisId) + '</td><td>' +
+          fmtMoney(r.requiredReserve) + '</td><td>' + fmtMoney(r.totalUnfunded) + '</td></tr>';
+      });
+      html += '</tbody></table>';
+    } else html += '<p class="empty">No rows.</p>';
+
+    var tailHtml = '';
+    tailHtml += renderObjectTable(h.parametersInventory, 'Exhibit 1 — parameters inventory');
+    tailHtml += renderObjectTable(h.peerRatios, 'Exhibit 2 — peer ratios');
+    tailHtml += renderObjectTable(h.hanmiSummaryMetrics, 'Exhibit 3 — Hanmi summary metrics');
+
+    return { html: html, tailHtml: tailHtml, meta: meta };
+  }
+
+  /** PDF order: 1. (parent) → 1.1 … 1.4 → 1.5 → exhibits. Model rollforward follows 1.5, before exhibits. */
+  function renderRollforwardBlock(q) {
+    var sections = q && Array.isArray(q.sections) ? q.sections : asArray(q && q.sections);
+    if (!sections.length) {
+      return '<p class="empty">No quarterly summary rollforward sections in file.</p>';
+    }
+    var h = '';
+    sections.forEach(function (sec) {
+      h += renderRollforwardSection(sec);
+    });
+    return h;
+  }
+
+  function renderAll(raw) {
+    var p = normalizeReportPayload(raw);
+    var q = p.rollforward;
+    var exhibits = p.exhibits;
+    var adj = p.adjustments;
+
+    var out = '';
+    var ex = renderExhibits(exhibits && typeof exhibits === 'object' ? exhibits : {});
+    var meta = ex.meta || {};
+    if (q && typeof q === 'object') {
+      if (meta.currentAnalysisId == null || meta.currentAnalysisId === '') {
+        meta.currentAnalysisId = q.currentAnalysisId;
+      }
+      if (meta.priorAnalysisId == null || meta.priorAnalysisId === '') {
+        meta.priorAnalysisId = q.priorAnalysisId;
+      }
+    }
+    var title = meta.reportTitle || 'Allowance for Credit Losses — Quarterly Analysis and Supplemental Exhibits';
+    out += '<h1>' + esc(title) + '</h1>';
+    out += '<p class="sub">Current analysis: <strong>' + esc(meta.currentAnalysisId) + '</strong> · Prior: <strong>' +
+      esc(meta.priorAnalysisId) + '</strong>';
+    if (meta.priorYearAnalysisId != null && meta.priorYearAnalysisId !== '') {
+      out += ' · Prior year: <strong>' + esc(meta.priorYearAnalysisId) + '</strong>';
+    }
+    out += '</p>';
+
+    out += '<h2>1. Changes to the ACL during the quarter</h2>';
+
+    out += ex.html;
+
+    out += '<h2>1.5 Sensitivity analysis</h2>';
+    out += '<p class="empty">Narrative-only in the PDF; not populated from this JSON export.</p>';
+
+    out += '<h2>Quarterly ACL summary (model output)</h2>';
+    out += '<p class="caption">Rollforward and pool-level metrics from the quarterly summary report (aligned with memo topics, placed here before supplemental exhibits).</p>';
+    out += renderRollforwardBlock(q);
+
+    out += ex.tailHtml || '';
+    out += renderAdjustments(adj);
+
+    return out;
+  }
+
+  function stripBom(text) {
+    if (typeof text !== 'string' || text.length === 0) return text;
+    if (text.charCodeAt(0) === 0xfeff) return text.slice(1);
+    return text;
+  }
+
+  function showRenderError(err) {
+    var msg = err && err.message ? err.message : String(err);
+    console.error('[hanmi_acl_report]', err);
+    return '<p class="empty">Render error: ' + esc(msg) + '</p>';
+  }
+
+  var root = document.getElementById('root');
+  function show(html) { root.innerHTML = html; }
+
+  document.getElementById('jsonFile').addEventListener('change', function (ev) {
+    var f = ev.target.files && ev.target.files[0];
+    if (!f) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      try {
+        var text = stripBom(String(reader.result || ''));
+        var data = JSON.parse(text);
+        show(renderAll(data));
+      } catch (e) {
+        show('<p class="empty">Invalid JSON or render failed: ' + esc(e.message) + '</p>');
+      }
+    };
+    reader.readAsText(f, 'UTF-8');
+  });
+
+  fetch(DATA_FILE, { cache: 'no-store' })
+    .then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function (data) {
+      try {
+        show(renderAll(data));
+      } catch (e) {
+        show(showRenderError(e));
+      }
+    })
+    .catch(function () {
+      show(
+        '<p class="empty">Could not load <code>' + esc(DATA_FILE) + '</code> automatically. ' +
+        'Use the file picker or a local server. Change <code>DEFAULT_DATA_FILE</code> or <code>?file=</code>.</p>'
+      );
+    });
+})();
+  </script>
+</body>
+</html>

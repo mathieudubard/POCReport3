@@ -407,6 +407,26 @@ class Model:
             return "Unallocated"
         return s
 
+    def _instrument_result_adjusted_column(self, df):
+        """Resolve instrumentResult ``adjusted`` (Boolean) column name, or None if missing."""
+        if df is None or df.empty:
+            return None
+        return self._resolve_column(df, "adjusted", "Adjusted")
+
+    def _mask_adjusted_true(self, df, col):
+        """
+        Mask for **qualitative** instrumentResult rows: ``adjusted`` must be the string ``TRUE``
+        (case-insensitive, after strip) or boolean True. **Everything else** is treated as
+        **quantitative** — including ``FALSE``, null/NaN, empty, numeric values, or any other string.
+        """
+        if col is None or col not in df.columns:
+            return pd.Series(False, index=df.index)
+        s = df[col]
+        if pd.api.types.is_bool_dtype(s):
+            return s.fillna(False)
+        str_s = s.astype(str).str.strip().str.upper()
+        return str_s == "TRUE"
+
     def _parse_quarter_label(self, quarter_label):
         """Parse 'Q{n} {year}' -> (year, quarter_num). Returns None if unparseable."""
         if not quarter_label:
@@ -842,11 +862,27 @@ class Model:
             collective = df_current_with_ref[df_current_with_ref[asc_col].astype(str).str.strip().str.lower().str.contains("collective", na=False)]
             adj_col = self._find_column(collective, "onBalanceSheetReserveAdjusted")
             unadj_col = self._find_column(collective, "onBalanceSheetReserveUnadjusted")
-            qual = (adj_col and unadj_col) and (collective[adj_col] - collective[unadj_col]).sum() or 0.0
-            quant = self._safe_sum(collective, "onBalanceSheetReserveUnadjusted")
             exp_col = self._find_column(collective, "amortizedCost")
             collectively_exposure = self._safe_sum(collective, "amortizedCost") if exp_col else 0.0
-            total_coll = self._safe_sum(collective, "onBalanceSheetReserveAdjusted") or (quant + qual)
+            total_coll = self._safe_sum(collective, "onBalanceSheetReserveAdjusted") or 0.0
+            adj_flag_col = self._instrument_result_adjusted_column(collective)
+            if adj_flag_col and adj_flag_col in collective.columns:
+                m_true = self._mask_adjusted_true(collective, adj_flag_col)
+                g_false = collective[~m_true]
+                g_true = collective[m_true]
+                quant = self._safe_sum(g_false, "onBalanceSheetReserveUnadjusted") if unadj_col else 0.0
+                qual = (
+                    (g_true[adj_col].sum() - g_true[unadj_col].sum())
+                    if (adj_col and unadj_col and not g_true.empty)
+                    else 0.0
+                )
+                if not total_coll and (quant or qual):
+                    total_coll = float(quant) + float(qual)
+            else:
+                qual = (adj_col and unadj_col) and (collective[adj_col] - collective[unadj_col]).sum() or 0.0
+                quant = self._safe_sum(collective, "onBalanceSheetReserveUnadjusted")
+                if not total_coll:
+                    total_coll = (quant + qual)
         else:
             collectively_exposure = 0.0
             quant = 0.0
@@ -1017,11 +1053,27 @@ class Model:
                     adj_col = self._find_column(collective, "onBalanceSheetReserveAdjusted")
                     unadj_col = self._find_column(collective, "onBalanceSheetReserveUnadjusted")
                     ac_col = self._find_column(collective, "amortizedCost")
+                    adj_flag_col = self._instrument_result_adjusted_column(collective)
                     for methodology, grp in collective.groupby("_methodology", dropna=False):
                         ac = self._safe_sum(grp, "amortizedCost") if ac_col else 0.0
-                        quant = self._safe_sum(grp, "onBalanceSheetReserveUnadjusted") if unadj_col else 0.0
-                        qual = (grp[adj_col].sum() - grp[unadj_col].sum()) if (adj_col and unadj_col) else 0.0
-                        total = self._safe_sum(grp, "onBalanceSheetReserveAdjusted") if adj_col else (quant + qual)
+                        total = self._safe_sum(grp, "onBalanceSheetReserveAdjusted") if adj_col else 0.0
+                        if adj_flag_col and adj_flag_col in collective.columns:
+                            m_true = self._mask_adjusted_true(grp, adj_flag_col)
+                            g_false = grp[~m_true]
+                            g_true = grp[m_true]
+                            quant = self._safe_sum(g_false, "onBalanceSheetReserveUnadjusted") if unadj_col else 0.0
+                            qual = (
+                                (g_true[adj_col].sum() - g_true[unadj_col].sum())
+                                if (adj_col and unadj_col and not g_true.empty)
+                                else 0.0
+                            )
+                            if not total and (quant or qual):
+                                total = float(quant) + float(qual)
+                        else:
+                            quant = self._safe_sum(grp, "onBalanceSheetReserveUnadjusted") if unadj_col else 0.0
+                            qual = (grp[adj_col].sum() - grp[unadj_col].sum()) if (adj_col and unadj_col) else 0.0
+                            if not total:
+                                total = quant + qual
                         collectively_by_methodology.append({
                             "methodology": str(methodology) if methodology is not None else "",
                             "amortizedCost": round(ac, 2),
@@ -1066,9 +1118,14 @@ class Model:
             merged = df_res.merge(ref_sub, left_on=left_on, right_on=right_on, how="left")
             ac_col = self._find_column(merged, "amortizedCost")
             quant_col = self._find_column(merged, "onBalanceSheetReserveUnadjusted")
+            adj_flag_col = self._instrument_result_adjusted_column(merged)
             for portfolio, grp in merged.groupby(seg_col, dropna=False):
                 ac = self._safe_sum(grp, "amortizedCost") if ac_col else 0.0
-                quant = self._safe_sum(grp, "onBalanceSheetReserveUnadjusted") if quant_col else 0.0
+                if adj_flag_col and adj_flag_col in merged.columns:
+                    g_false = grp[~self._mask_adjusted_true(grp, adj_flag_col)]
+                    quant = self._safe_sum(g_false, "onBalanceSheetReserveUnadjusted") if quant_col else 0.0
+                else:
+                    quant = self._safe_sum(grp, "onBalanceSheetReserveUnadjusted") if quant_col else 0.0
                 rate = (quant / ac * 100.0) if ac else None
                 seg_display = self._normalize_segment_display(portfolio)
                 quantitative_by_segment["main"].append({
@@ -1111,29 +1168,48 @@ class Model:
         net_chargeoffs_annual = self._build_net_chargeoffs_annual(net_chargeoffs_quarterly)
 
         qualitative_by_segment = {"main": []}
-        if df_current is not None and not df_current.empty and df_ref_current is not None:
-            id_res = self._find_column(df_current, "instrumentIdentifier")
-            id_ref = self._find_column(df_ref_current, "instrumentIdentifier")
-            if id_res and id_ref and segment_col:
-                ref_sub = df_ref_current[[id_ref, segment_col]].drop_duplicates()
-                merged = df_current.merge(ref_sub, left_on=id_res, right_on=id_ref, how="left")
-                adj_col = self._find_column(merged, "onBalanceSheetReserveAdjusted")
-                unadj_col = self._find_column(merged, "onBalanceSheetReserveUnadjusted")
-                ac_col = self._find_column(merged, "amortizedCost")
-                for portfolio, grp in merged.groupby(segment_col, dropna=False):
+        for analysis_id, quarter_label in quarters_for_tables:
+            if not analysis_id:
+                continue
+            df_res = self._load_parquet_for_analysis("instrumentResult", analysis_id, filter_summary=True)
+            df_ref = self._load_parquet_for_analysis("instrumentReference", analysis_id) if analysis_id else None
+            if df_res is None or df_res.empty or df_ref is None or df_ref.empty:
+                continue
+            id_res = self._find_column(df_res, "instrumentIdentifier")
+            id_ref = self._find_column(df_ref, "instrumentIdentifier")
+            seg_dim, seg_col = self._get_segment_column(df_ref)
+            if not id_res or not id_ref or not seg_col:
+                print("[hanmi_acl_report] qualitativeReserves: SKIP analysisId={} id_res={}, id_ref={}, segment_col={}".format(
+                    analysis_id, bool(id_res), bool(id_ref), bool(seg_col)))
+                continue
+            left_on, right_on = self._join_keys_and_log(df_res, df_ref, "result", "ref", analysis_id)
+            if left_on is None:
+                continue
+            ref_sub = df_ref[right_on + [seg_col]].drop_duplicates()
+            merged = df_res.merge(ref_sub, left_on=left_on, right_on=right_on, how="left")
+            adj_col = self._find_column(merged, "onBalanceSheetReserveAdjusted")
+            unadj_col = self._find_column(merged, "onBalanceSheetReserveUnadjusted")
+            ac_col = self._find_column(merged, "amortizedCost")
+            adj_flag_col = self._instrument_result_adjusted_column(merged)
+            for portfolio, grp in merged.groupby(seg_col, dropna=False):
+                ac = self._safe_sum(grp, "amortizedCost") if ac_col else 0.0
+                if adj_flag_col and adj_flag_col in merged.columns:
+                    g_true = grp[self._mask_adjusted_true(grp, adj_flag_col)]
+                    qual = (
+                        (g_true[adj_col].sum() - g_true[unadj_col].sum())
+                        if (adj_col and unadj_col and not g_true.empty)
+                        else 0.0
+                    )
+                else:
                     qual = (grp[adj_col].sum() - grp[unadj_col].sum()) if (adj_col and unadj_col) else 0.0
-                    ac = self._safe_sum(grp, "amortizedCost") if ac_col else 0.0
-                    rate = (qual / ac * 100.0) if ac else None
-                    qualitative_by_segment["main"].append({
-                        "segment": self._normalize_segment_display(portfolio),
-                        "qualitativeReserve": round(qual, 2),
-                        "qualitativeRatePct": round(rate, 4) if rate is not None else None,
-                    })
-            else:
-                print("[hanmi_acl_report] qualitativeReserves: SKIP - id_res={}, id_ref={}, segment_col={}".format(
-                    bool(id_res), bool(id_ref), bool(segment_col)))
-        else:
-            print("[hanmi_acl_report] qualitativeReserves: SKIP - result or ref empty")
+                rate = (qual / ac * 100.0) if ac else None
+                qualitative_by_segment["main"].append({
+                    "segment": self._normalize_segment_display(portfolio),
+                    "analysisId": analysis_id,
+                    "quarterLabel": quarter_label,
+                    "qualitativeReserve": round(qual, 2),
+                    "qualitativeRatePct": round(rate, 4) if rate is not None else None,
+                })
 
         macroeconomic_baseline = []
         if df_macro is not None and not df_macro.empty:
