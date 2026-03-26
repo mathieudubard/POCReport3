@@ -50,6 +50,49 @@ def looks_like_cappy_jwt_failure(exc: BaseException) -> bool:
     return False
 
 
+def looks_like_cappy_tenant_infra_failure(exc: BaseException) -> bool:
+    """
+    True when Cappy failed while calling Rafa tenant/infra (e.g. GET .../infra/1.0/resources).
+    Often HTTP 500 from the platform — not the Hanmi report code path.
+    """
+    msg = str(exc).lower()
+    if "/infra/" in msg and "resources" in msg:
+        return True
+    if "failed to get tenant" in msg:
+        return True
+    if "internal server error" in msg and "infra" in msg:
+        return True
+    return False
+
+
+def log_cappy_tenant_infra_failure(logger: logging.Logger, exc: BaseException, context: str) -> None:
+    """
+    Loud stdout + logger when Cappy cannot resolve tenant via Rafa infra (e.g. 500 on /infra/1.0/resources).
+    """
+    ctx = (context or "Cappy session").strip() or "Cappy session"
+    lines = [
+        "",
+        "=" * 72,
+        "  CAPPY / RAFA INFRA — TENANT RESOLUTION FAILED",
+        "  (%s)" % ctx,
+        "=" * 72,
+        "  Cappy calls the Rafa tenant API (e.g. .../infra/1.0/resources) before S3/report work.",
+        "  This failure is not a Hanmi quarterly-report logic bug.",
+        "",
+        "  If you see HTTP 500 / Internal Server Error on infra:",
+        "    - Often transient: retry the run; check QA/platform status.",
+        "    - Confirm MOODYS_TENANT_URL / SSO env matches the JWT (same environment, e.g. QA).",
+        "    - If it persists, escalate to the Rafa/infra team with the URL and time — server-side error.",
+        "",
+        "  Underlying error: %s" % (exc,),
+        "=" * 72,
+        "",
+    ]
+    text = "\n".join(lines)
+    logger.error(text)
+    print(text, flush=True)
+
+
 def log_cappy_jwt_unusable(logger: logging.Logger, exc: BaseException, context: str) -> None:
     """
     Loud stdout + logger when Cappy cannot validate the JWT. Never log the raw token.

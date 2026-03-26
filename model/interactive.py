@@ -119,6 +119,7 @@ def build_interactive_mrp(
         "scenarios": [],
         "liveS3InputsByAnalysisId": True,
         "exportCsvInputs": True,
+        "fetchAdjustmentDetails": True,
         "returnReportsInResponse": True,
         "libraryMode": True,
     }
@@ -195,7 +196,7 @@ def interactive_run(
     ids_preview = [str(a) for a in analysis_ids if a is not None and str(a).strip() != ""]
     _req_line = (
         "[interactive_run] REQUEST analysisIds (n={}): {} — return shape will be "
-        "{{'quarterly_summary_report': dict, 'hanmi_acl_quarterly_report': dict|None}}"
+        "{{'quarterly_summary_report', 'hanmi_acl_quarterly_report', 'adjustment_details'}}"
     ).format(len(ids_preview), ids_preview)
     logger.info(_req_line)
     print(_req_line, flush=True)
@@ -250,21 +251,37 @@ def interactive_run(
         if isinstance(hanmi, dict) and hanmi.get("_parseError"):
             hanmi = None
 
+        akey = "adjustment_details.json"
+        adjustment_details = reports.get(akey)
+        if isinstance(adjustment_details, dict) and adjustment_details.get("_parseError"):
+            adjustment_details = None
+
         out = {
             "quarterly_summary_report": quarterly,
             "hanmi_acl_quarterly_report": hanmi,
+            "adjustment_details": adjustment_details,
         }
         n_q_sections = len((quarterly or {}).get("sections") or []) if isinstance(quarterly, dict) else 0
         n_h_top = len(hanmi) if isinstance(hanmi, dict) else 0
+        if isinstance(adjustment_details, list):
+            n_adj = len(adjustment_details)
+        elif isinstance(adjustment_details, dict) and adjustment_details.get("_error"):
+            n_adj = "error_stub"
+        elif adjustment_details is None:
+            n_adj = "none"
+        else:
+            n_adj = type(adjustment_details).__name__
         _ret_line = (
             "[interactive_run] RETURN ok top_level_keys={} quarterly_summary.sections={} "
-            "quarterly_summary.currentAnalysisId={!r} hanmi_acl is_dict={} hanmi_top_level_keys={}"
+            "quarterly_summary.currentAnalysisId={!r} hanmi_acl is_dict={} hanmi_top_level_keys={} "
+            "adjustment_details_len={}"
         ).format(
             list(out.keys()),
             n_q_sections,
             (quarterly or {}).get("currentAnalysisId") if isinstance(quarterly, dict) else None,
             isinstance(hanmi, dict),
             n_h_top,
+            n_adj,
         )
         logger.info(_ret_line)
         print(_ret_line, flush=True)

@@ -79,12 +79,13 @@ Compact context for agents. See README.md for full project layout.
 - `settings.settingsCallbackUrl`: if present, callback runs and returns `inputPaths` (and optionally more).
 - `settings.inputPath`: execution input prefix (e.g. `apps/reports/executionId=...-report/input`); used for custInputs and for Step 1 listing.
 - `settings.outputPaths.report`: target for report outputs (JSON files).
+- `settings.fetchAdjustmentDetails` (default **true**): after reports, GET Impairment Studio [`/adjustment/1.0/analyses/{currentAnalysisId}/adjustmentdetails`](https://qa-api.impairmentstudio.moodysanalytics.net/adjustment/docs/swagger-ui/index.html) with the same Bearer JWT as Cappy; writes `adjustment_details.json` (array or error stub). Override base URL with env **`IMPAIRMENT_STUDIO_API_BASE`** (default QA host). `interactive_run` adds top-level **`adjustment_details`** to the returned JSON.
 
 ---
 
 ## Dependencies
 
-- Python: moodyscappy (Cappy), pandas, pyarrow (for `read_parquet`).
+- Python: moodyscappy (Cappy), pandas, pyarrow (for `read_parquet`), `requests` (adjustment API + callback).
 - Auth: JWT or username/password via `-j` / `-u`; Cappy uses it for S3.
 - Batch entry point: `model/run.py` → `run_model_batch()` (ManagedBatch / S3 or local MRP). For API-style runs without a settings callback, set `settings.liveS3InputsByAnalysisId: true` with `settings.analysisIds` so parquet is fetched live from S3 (JWT). To return all report `*.json` files in an API response, set `settings.returnReportsInResponse: true`; after `run()`, read `model.report_response_payload` or use `run_model_batch(..., return_model=True)`. Details: `docs/HANMI_BATCH_AND_INTERACTIVE.md`.
 

@@ -28,6 +28,7 @@ class TestInteractiveMrp(unittest.TestCase):
         self.assertEqual(obj.settings.get("analysisIds"), ["4647909", "4647997"])
         self.assertTrue(obj.settings.get("liveS3InputsByAnalysisId"))
         self.assertTrue(obj.settings.get("exportCsvInputs"))
+        self.assertTrue(obj.settings.get("fetchAdjustmentDetails"))
         self.assertTrue(obj.settings.get("returnReportsInResponse"))
         self.assertTrue(obj.settings.get("libraryMode"))
 

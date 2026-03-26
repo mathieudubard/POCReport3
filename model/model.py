@@ -5,7 +5,9 @@ from . import iosession
 from .cappy_log import (
     cappy_echo_info,
     log_cappy_jwt_unusable,
+    log_cappy_tenant_infra_failure,
     looks_like_cappy_jwt_failure,
+    looks_like_cappy_tenant_infra_failure,
     milestone_banner,
 )
 import json
@@ -141,6 +143,8 @@ class Model:
         except Exception as e:
             if looks_like_cappy_jwt_failure(e):
                 log_cappy_jwt_unusable(self.logger, e, "main Cappy session")
+            elif looks_like_cappy_tenant_infra_failure(e):
+                log_cappy_tenant_infra_failure(self.logger, e, "main Cappy session")
             raise
         self.io_session = iosession.IOSession(self.cap_session, model_run_parameters_path, local_mode, credentials)
         self.model_run_parameters = self.io_session.model_run_parameters
@@ -156,10 +160,13 @@ class Model:
             except Exception as e:
                 if looks_like_cappy_jwt_failure(e):
                     log_cappy_jwt_unusable(self.logger, e, "proxy Cappy session")
+                elif looks_like_cappy_tenant_infra_failure(e):
+                    log_cappy_tenant_infra_failure(self.logger, e, "proxy Cappy session")
                 raise
         # When settings.returnReportsInResponse is true, run() sets this to {"reports": {filename: object, ...}} for API responses.
         self.report_response_payload = None
         self._parquet_load_cache = {}
+        self._jwt = credentials.get("jwt")
 
     def _is_library_mode(self):
         """True when settings.libraryMode — importable runs: no S3 uploads, no zip, no log upload."""
@@ -190,6 +197,8 @@ class Model:
 
         print("[Model run] Step 3b: Build Hanmi ACL quarterly report (multi-section JSON)")
         self.build_hanmi_acl_quarterly_report()
+
+        self._fetch_and_write_adjustment_details()
 
         if not self._is_library_mode():
             print("[Model run] Step 4: Create zip of all report output files")
@@ -1323,6 +1332,53 @@ class Model:
             json.dump(out, f, indent=2, default=str)
         print("[debug_all_data] built for {} analyses -> {}".format(len(by_analysis), debug_path))
 
+    def _fetch_and_write_adjustment_details(self):
+        """
+        For the **current** (main / latest) analysis, GET Impairment Studio adjustment details and write
+        ``adjustment_details.json`` into the report dir (included in report_response_payload when enabled).
+
+        API: ``{IMPAIRMENT_STUDIO_API_BASE}/adjustment/1.0/analyses/{id}/adjustmentdetails`` (Bearer JWT).
+        Opt out: ``settings.fetchAdjustmentDetails`` = false.
+        """
+        if not self.model_run_parameters.settings.get("fetchAdjustmentDetails", True):
+            print("[Model run] adjustment details: skipped (settings.fetchAdjustmentDetails=false)")
+            return
+        if not self._jwt:
+            print("[Model run] adjustment details: skipped (no JWT)")
+            return
+        report_dir = self.io_session.local_directories.get("outputPaths", {}).get("report")
+        if not report_dir:
+            return
+        analysis_ids = self.model_run_parameters.settings.get("analysisIds") or []
+        self._resolve_analysis_roles_from_dates(report_dir, analysis_ids)
+        current_id, _, _, _ = self._get_analysis_roles()
+        if not current_id:
+            print("[Model run] adjustment details: skipped (no current analysis id)")
+            return
+        from .adjustment_api import fetch_adjustment_details_json
+
+        print(
+            "[Model run] adjustment details: GET (Authorization: Bearer <JWT>, same token as Cappy) analysisId={}".format(
+                current_id
+            )
+        )
+        data = fetch_adjustment_details_json(self._jwt, current_id)
+        out_path = os.path.join(report_dir, "adjustment_details.json")
+        os.makedirs(report_dir, exist_ok=True)
+        if data is None:
+            err_doc = {
+                "_error": "adjustment_details_unavailable",
+                "analysisId": str(current_id),
+                "adjustments": [],
+            }
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(err_doc, f, indent=2)
+            print("[Model run] adjustment details: wrote failure stub -> {}".format(out_path))
+            return
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, default=str)
+        print("[Model run] adjustment details: wrote {} record(s) -> {}".format(len(data), out_path))
+
     def _build_report_response_payload(self):
         """
         If settings.returnReportsInResponse is true, load every *.json in the report output dir into
@@ -1357,7 +1413,7 @@ class Model:
 
     @staticmethod
     def collect_json_reports_from_directory(report_dir):
-        """Load all top-level *.json files from report_dir into {filename: dict}. Public for tests."""
+        """Load all top-level *.json files from report_dir into {filename: parsed JSON}. Public for tests."""
         if not report_dir or not os.path.isdir(report_dir):
             return {}
         out = {}
