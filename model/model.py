@@ -96,6 +96,7 @@ REPORT_PARQUET_COLS_NORMALIZED = {
             "amortizedCost",
             "offBalanceSheetEADAmountLifetime",
             "allowanceProvisionDelta",
+            "adjusted",
         ]
     ),
     "instrumentReporting": _parquet_wanted_normalized(
@@ -792,6 +793,55 @@ class Model:
             len(REPORT_MACRO_VARIABLE_NAMES), REPORT_MACRO_QUARTERS_BACK, REPORT_MACRO_QUARTERS_FORWARD, len(out)))
         return out
 
+    def _get_macro_base_as_of_date(self, report_dir, analysis_id):
+        """BASE scenario asOfDate (YYYY-MM-DD) from analysisDetails, for macro input path alignment."""
+        io = self.io_session
+        if hasattr(io, "_get_macro_scenario_date_from_analysis_details"):
+            return io._get_macro_scenario_date_from_analysis_details(report_dir, analysis_id)
+        return None
+
+    def _build_macroeconomic_baseline_wide(self, flat_rows, quarter_labels_ordered):
+        """
+        One numeric value per (variableName, quarterLabel): latest valueDate in that quarter's rows wins.
+        quarter_labels_ordered preserves chronological column order from the report run.
+        """
+        out = {"quarterLabels": list(quarter_labels_ordered or []), "rows": []}
+        if not flat_rows or not quarter_labels_ordered:
+            return out
+        ql_set = set(quarter_labels_ordered)
+        best = {}  # (variableName, quarterLabel) -> (pd.Timestamp, value)
+        for r in flat_rows:
+            vn = (r.get("variableName") or "").strip()
+            ql = r.get("quarterLabel")
+            if not vn or ql not in ql_set:
+                continue
+            vd = r.get("valueDate")
+            val = r.get("value")
+            try:
+                vdt = pd.to_datetime(vd, errors="coerce")
+            except Exception:
+                vdt = pd.NaT
+            key = (vn, ql)
+            cur = best.get(key)
+            if cur is None:
+                best[key] = (vdt, val)
+            else:
+                cur_dt, cur_val = cur
+                if pd.notna(vdt) and (pd.isna(cur_dt) or vdt > cur_dt):
+                    best[key] = (vdt, val)
+                elif pd.isna(vdt) and pd.isna(cur_dt) and cur_val is None and val is not None:
+                    best[key] = (vdt, val)
+        var_names = sorted({(r.get("variableName") or "").strip() for r in flat_rows if (r.get("variableName") or "").strip()})
+        rows_out = []
+        for vn in var_names:
+            vbq = {}
+            for ql in quarter_labels_ordered:
+                t = best.get((vn, ql))
+                vbq[ql] = t[1] if t is not None else None
+            rows_out.append({"variableName": vn, "valuesByQuarter": vbq})
+        out["rows"] = rows_out
+        return out
+
     def build_quarterly_summary_report(self):
         """
         Build structured JSON for Allowance for Credit Losses – Quarterly Summary per sample/useCase.txt.
@@ -996,13 +1046,10 @@ class Model:
         df_reporting_current = self._load_parquet_for_analysis("instrumentReporting", current_id)
         df_ref_current = self._load_parquet_for_analysis("instrumentReference", current_id)
         df_ref_prior = self._load_parquet_for_analysis("instrumentReference", prior_id) if prior_id else None
-        df_macro = self._load_parquet_for_analysis("macroEconomicVariableInput", current_id) if current_id else None
-        if df_macro is not None and not df_macro.empty:
-            df_macro = self._filter_macro_for_report(df_macro, report_dir, current_id)
-        print("[hanmi_acl_report] data loaded: result(current={}, prior={}), reporting={}, ref={}, macro={}".format(
+        print("[hanmi_acl_report] data loaded: result(current={}, prior={}), reporting={}, ref={}".format(
             len(df_current) if df_current is not None else 0, len(df_prior) if df_prior is not None else 0,
             len(df_reporting_current) if df_reporting_current is not None else 0,
-            len(df_ref_current) if df_ref_current is not None else 0, len(df_macro) if df_macro is not None else 0))
+            len(df_ref_current) if df_ref_current is not None else 0))
         if df_current is None or df_current.empty:
             print("[hanmi_acl_report] result current EMPTY -> segment/collective/quant/qual/individual/unfunded will be empty")
 
@@ -1095,6 +1142,42 @@ class Model:
 
         quantitative_by_segment = {"main": [], "creSubSegments": []}
         quarters_for_tables = self._get_quarters_for_tables(report_dir, current_id, prior_id, quarters_list)
+        quarter_labels_chrono = []
+        _seen_ql = set()
+        for _aid, _ql in quarters_for_tables:
+            if _ql and _ql not in _seen_ql:
+                _seen_ql.add(_ql)
+                quarter_labels_chrono.append(_ql)
+
+        macroeconomic_baseline = []
+        for analysis_id, quarter_label in quarters_for_tables:
+            if not analysis_id:
+                continue
+            df_m = self._load_parquet_for_analysis("macroEconomicVariableInput", analysis_id)
+            if df_m is None or df_m.empty:
+                continue
+            df_m = self._filter_macro_for_report(df_m, report_dir, analysis_id)
+            if df_m is None or df_m.empty:
+                continue
+            asof = self._get_macro_base_as_of_date(report_dir, analysis_id)
+            name_col = self._find_column(df_m, "macroeconomicVariableName")
+            date_col = self._find_column(df_m, "valueDate")
+            value_col = self._find_column(df_m, "macroeconomicVariableValue")
+            if not name_col or not value_col:
+                continue
+            for _, row in df_m.iterrows():
+                macroeconomic_baseline.append({
+                    "variableName": str(row[name_col]) if pd.notna(row.get(name_col)) else "",
+                    "valueDate": str(row[date_col]) if date_col and pd.notna(row.get(date_col)) else None,
+                    "value": round(float(row[value_col]), 6) if pd.notna(row.get(value_col)) else None,
+                    "quarterLabel": quarter_label,
+                    "analysisId": str(analysis_id),
+                    "macroBaseAsOfDate": asof,
+                })
+        macroeconomic_baseline_wide = self._build_macroeconomic_baseline_wide(macroeconomic_baseline, quarter_labels_chrono)
+        print("[hanmi_acl_report] macro: baseline rows={}, wide columns={}".format(
+            len(macroeconomic_baseline), len(macroeconomic_baseline_wide.get("quarterLabels") or [])))
+
         for analysis_id, quarter_label in quarters_for_tables:
             if not analysis_id:
                 continue
@@ -1211,19 +1294,6 @@ class Model:
                     "qualitativeRatePct": round(rate, 4) if rate is not None else None,
                 })
 
-        macroeconomic_baseline = []
-        if df_macro is not None and not df_macro.empty:
-            name_col = self._find_column(df_macro, "macroeconomicVariableName")
-            date_col = self._find_column(df_macro, "valueDate")
-            value_col = self._find_column(df_macro, "macroeconomicVariableValue")
-            if name_col and value_col:
-                for _, row in df_macro.iterrows():
-                    macroeconomic_baseline.append({
-                        "variableName": str(row[name_col]) if pd.notna(row.get(name_col)) else "",
-                        "valueDate": str(row[date_col]) if date_col and pd.notna(row.get(date_col)) else None,
-                        "value": round(float(row[value_col]), 6) if pd.notna(row.get(value_col)) else None,
-                    })
-
         individual_analysis = []
         if df_current is not None and df_ref_current is not None and not df_ref_current.empty:
             id_res = self._find_column(df_current, "instrumentIdentifier")
@@ -1308,6 +1378,7 @@ class Model:
             "netChargeOffsAnnual": net_chargeoffs_annual,
             "qualitativeReservesBySegment": qualitative_by_segment,
             "macroeconomicBaseline": macroeconomic_baseline,
+            "macroeconomicBaselineWide": macroeconomic_baseline_wide,
             "individualAnalysis": individual_analysis,
             "unfundedBySegment": unfunded_by_segment,
             "unfundedTrend": unfunded_trend,

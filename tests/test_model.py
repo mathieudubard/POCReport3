@@ -357,6 +357,7 @@ class TestBuildHanmiAclQuarterlyReport(unittest.TestCase):
         self.assertIn("netChargeOffsAnnual", data)
         self.assertIn("qualitativeReservesBySegment", data)
         self.assertIn("macroeconomicBaseline", data)
+        self.assertIn("macroeconomicBaselineWide", data)
         self.assertIn("individualAnalysis", data)
         self.assertIn("unfundedBySegment", data)
         self.assertIn("unfundedTrend", data)
@@ -424,6 +425,10 @@ class TestBuildHanmiAclQuarterlyReport(unittest.TestCase):
         self.assertEqual(len(macro), 2)
         self.assertEqual(macro[0]["variableName"], "USA Unemployment Rate")
         self.assertEqual(macro[0]["value"], 4.1)
+        self.assertIn("quarterLabel", macro[0])
+        wide = data.get("macroeconomicBaselineWide") or {}
+        self.assertIn("quarterLabels", wide)
+        self.assertIn("rows", wide)
 
     def test_segment_methodology_populated_with_lowercase_ref_columns(self):
         """segmentMethodology is populated when ref has lowercase columns (portfolioidentifier, pdmodelname)."""

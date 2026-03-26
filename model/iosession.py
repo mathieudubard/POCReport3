@@ -805,15 +805,6 @@ class IOSession :
                             local_path,
                         )
 
-            main_analysis_id = (self.model_run_parameters.settings.get("analysisRoles") or {}).get("current")
-            if main_analysis_id is None and analysis_ids:
-                main_analysis_id = analysis_ids[0]
-            macro_target_idx = 0
-            for _mi, _maid in enumerate(analysis_ids or []):
-                if str(_maid) == str(main_analysis_id):
-                    macro_target_idx = _mi
-                    break
-
             instrument_result_paths = source_input_directory.get("instrumentResult") or []
             instrument_reporting_paths = source_input_directory.get("instrumentReporting") or []
             instrument_reference_paths = source_input_directory.get("instrumentReference") or []
@@ -843,31 +834,31 @@ class IOSession :
                 lp = os.path.join(instrument_reference_paths[idx], "instrumentReference.csv")
                 _fetch_one_csv(_export_csv_key(aid, "instrumentReference"), lp, idx, "instrumentReference")
 
-            # macroEconomicVariableInput: not in export CSV — parquet under input/ (asofdate from analysisDetails, BASE).
-            scenario_asof_date = self._get_macro_scenario_date_from_analysis_details(report_dir, main_analysis_id)
-            if not scenario_asof_date:
-                print("[getSourceInputFiles] macro: no asOfDate from analysisDetails (will try default path)")
+            # macroEconomicVariableInput: not in export CSV — parquet under input/ (per analysis, BASE asOfDate from analysisDetails).
             if macro_paths and analysis_ids:
                 print(
-                    "[getSourceInputFiles] macro parquet: analysis index {} only (main/current analysisId={})".format(
-                        macro_target_idx,
-                        main_analysis_id,
-                    )
+                    "[getSourceInputFiles] macro parquet: one download per analysisId "
+                    "(asOfDate from BASE scenario in analysisDetails; fallback reportingDate / analysisidentifier path)"
                 )
             for idx, aid in enumerate(analysis_ids or []):
                 if idx >= len(macro_paths):
                     break
-                if idx != macro_target_idx:
-                    continue
                 local_dir = macro_paths[idx]
                 os.makedirs(local_dir, exist_ok=True)
                 if self._tenant_s3_inputs_enabled():
                     cat_folder = "macroeconomicVariableInput"
-                    try_date_used = scenario_asof_date
-                    if not try_date_used:
-                        try_date_used = self._get_reporting_date_from_analysis_details(report_dir, main_analysis_id or aid)
+                    scenario_asof_date = self._get_macro_scenario_date_from_analysis_details(report_dir, aid)
+                    try_dates = []
+                    if scenario_asof_date:
+                        try_dates.append(scenario_asof_date)
+                    rd = self._get_reporting_date_from_analysis_details(report_dir, aid)
+                    if rd:
+                        rd_norm = self._normalize_date_for_path(rd)
+                        if rd_norm and rd_norm not in try_dates:
+                            try_dates.append(rd_norm)
+                    try_dates.append(None)
                     parquet_keys = []
-                    for try_date in (try_date_used, None):
+                    for try_date in try_dates:
                         if try_date:
                             prefix = "{}/{}/asofdate={}/scenarioidentifier={}/".format(
                                 self.INPUT_ROOT_BASE, cat_folder, try_date, self.MACRO_SCENARIO_BASELINE)
@@ -888,7 +879,10 @@ class IOSession :
                             self._s3_download_batch(batch)
                             break
                     if not parquet_keys:
-                        print("[getSourceInputFiles] macro: no parquet at input/.../asofdate=.../scenarioidentifier=BASE/")
+                        print(
+                            "[getSourceInputFiles] macro: analysisId={} no parquet at "
+                            "input/.../asofdate=.../BASE/ or analysisidentifier fallback".format(aid)
+                        )
                 else:
                     pass
 
