@@ -267,6 +267,8 @@ def interactive_run(
             n_adj = len(adjustment_details)
         elif isinstance(adjustment_details, dict) and adjustment_details.get("_error"):
             n_adj = "error_stub"
+        elif isinstance(adjustment_details, dict) and isinstance(adjustment_details.get("adjustments"), list):
+            n_adj = len(adjustment_details["adjustments"])
         elif adjustment_details is None:
             n_adj = "none"
         else:

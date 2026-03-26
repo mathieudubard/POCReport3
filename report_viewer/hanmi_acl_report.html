@@ -752,8 +752,32 @@
       });
       return h;
     }
+    if (typeof adj === 'object' && adj.byAnalysisId && typeof adj.byAnalysisId === 'object') {
+      var bag = adj.byAnalysisId;
+      var ids = Object.keys(bag).sort();
+      var anyRows = ids.some(function (aid) { return Array.isArray(bag[aid]) && bag[aid].length; });
+      if (!anyRows) {
+        return '<h2>Qualitative adjustments</h2><p class="empty">No rows returned from the adjustment API for any analysis.</p>';
+      }
+      var hw = '<h2>Qualitative adjustments</h2>';
+      hw += '<p class="narrative">Per analysis (Impairment Studio adjustment API). Identifiers omitted in cards.</p>';
+      ids.forEach(function (aid) {
+        var rows = bag[aid];
+        if (!Array.isArray(rows) || !rows.length) return;
+        hw += '<h3>Analysis ' + esc(aid) + '</h3>';
+        rows.forEach(function (row, i) {
+          hw += renderOneAdjustmentCard(row, i);
+        });
+      });
+      return hw;
+    }
+    if (typeof adj === 'object' && Array.isArray(adj.adjustments)) {
+      return renderAdjustments(adj.adjustments);
+    }
     if (typeof adj === 'object') {
-      var keys = Object.keys(adj).filter(function (k) { return !ADJ_HIDE_KEYS[k]; });
+      var keys = Object.keys(adj).filter(function (k) {
+        return !ADJ_HIDE_KEYS[k] && k !== 'byAnalysisId' && k !== 'currentAnalysisId' && k !== 'analysisIds';
+      });
       if (!keys.length) return '<h2>Qualitative adjustments</h2><p class="empty">No displayable fields.</p>';
       var h2 = '<h2>Qualitative adjustments</h2><table><tbody>';
       keys.forEach(function (k) {

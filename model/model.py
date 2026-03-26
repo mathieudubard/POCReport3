@@ -93,6 +93,9 @@ REPORT_PARQUET_COLS_NORMALIZED = {
             "offBalanceSheetReserve",
             "onBalanceSheetReserveAdjusted",
             "onBalanceSheetReserveUnadjusted",
+            "lossAllowanceAdjusted",
+            "lossAllowanceUnadjusted",
+            "lossAllowanceDelta",
             "amortizedCost",
             "offBalanceSheetEADAmountLifetime",
             "allowanceProvisionDelta",
@@ -414,19 +417,93 @@ class Model:
             return None
         return self._resolve_column(df, "adjusted", "Adjusted")
 
+    def _resolve_instrument_result_adj_unadj_columns(self, df):
+        """
+        Prefer on-balance-sheet reserve adjusted/unadjusted; else datamodel lossAllowance adjusted/unadjusted.
+        Export CSV/parquet may use either naming (flexible match). Returns (adj_col, unadj_col) or (None, None).
+        """
+        if df is None or df.empty:
+            return None, None
+        adj = self._resolve_column(
+            df,
+            "onBalanceSheetReserveAdjusted",
+            "onbalancesheetreserveadjusted",
+            "On Balance Sheet Reserve Adjusted",
+            "on_balance_sheet_reserve_adjusted",
+        )
+        unadj = self._resolve_column(
+            df,
+            "onBalanceSheetReserveUnadjusted",
+            "onbalancesheetreserveunadjusted",
+            "On Balance Sheet Reserve Unadjusted",
+            "on_balance_sheet_reserve_unadjusted",
+        )
+        if adj and unadj:
+            return adj, unadj
+        adj2 = self._resolve_column(
+            df,
+            "lossAllowanceAdjusted",
+            "lossallowanceadjusted",
+            "Loss Allowance Adjusted",
+            "loss_allowance_adjusted",
+        )
+        unadj2 = self._resolve_column(
+            df,
+            "lossAllowanceUnadjusted",
+            "lossallowanceunadjusted",
+            "Loss Allowance Unadjusted",
+            "loss_allowance_unadjusted",
+        )
+        if adj2 and unadj2:
+            return adj2, unadj2
+        return None, None
+
+    def _resolve_unadjusted_reserve_column(self, df):
+        """Unadjusted reserve level for quantitative loss-rate math (pair or unadjusted-only)."""
+        _, u = self._resolve_instrument_result_adj_unadj_columns(df)
+        if u:
+            return u
+        return self._resolve_column(
+            df,
+            "onBalanceSheetReserveUnadjusted",
+            "lossAllowanceUnadjusted",
+            "onbalancesheetreserveunadjusted",
+            "lossallowanceunadjusted",
+        )
+
+    def _resolve_loss_allowance_delta_column(self, df):
+        """
+        Instrument Result **Allowance Amount** (datamodel: ``lossAllowanceDelta``): change in allowance,
+        defined as the sum of on- and off-balance-sheet reserves. Preferred for quantitative vs qualitative
+        splits by ``adjusted`` when present. See ImpairmentStudio-DataDictionary.csv (Instrument Result).
+        """
+        if df is None or df.empty:
+            return None
+        return self._resolve_column(
+            df,
+            "lossAllowanceDelta",
+            "lossallowancedelta",
+            "Loss Allowance Delta",
+            "loss_allowance_delta",
+        )
+
     def _mask_adjusted_true(self, df, col):
         """
         Mask for **qualitative** instrumentResult rows: ``adjusted`` must be the string ``TRUE``
-        (case-insensitive, after strip) or boolean True. **Everything else** is treated as
-        **quantitative** — including ``FALSE``, null/NaN, empty, numeric values, or any other string.
+        (case-insensitive, after strip), boolean True, or integer 1. **Everything else** is treated as
+        **quantitative** — including ``FALSE``, null/NaN, empty, 0, or other strings.
         """
         if col is None or col not in df.columns:
             return pd.Series(False, index=df.index)
         s = df[col]
         if pd.api.types.is_bool_dtype(s):
             return s.fillna(False)
+        if pd.api.types.is_integer_dtype(s):
+            return s.fillna(0).astype(int).eq(1)
+        if pd.api.types.is_float_dtype(s):
+            return pd.to_numeric(s, errors="coerce").fillna(0).eq(1.0)
         str_s = s.astype(str).str.strip().str.upper()
-        return str_s == "TRUE"
+        return (str_s == "TRUE") | (str_s == "1")
 
     def _parse_quarter_label(self, quarter_label):
         """Parse 'Q{n} {year}' -> (year, quarter_num). Returns None if unparseable."""
@@ -910,27 +987,33 @@ class Model:
         asc_col = self._resolve_column(_df_for_asc, "ascImpairmentEvaluation", "ascimpairmentevaluation")
         if asc_col and df_current_with_ref is not None and not df_current_with_ref.empty:
             collective = df_current_with_ref[df_current_with_ref[asc_col].astype(str).str.strip().str.lower().str.contains("collective", na=False)]
-            adj_col = self._find_column(collective, "onBalanceSheetReserveAdjusted")
-            unadj_col = self._find_column(collective, "onBalanceSheetReserveUnadjusted")
+            adj_col, unadj_col = self._resolve_instrument_result_adj_unadj_columns(collective)
+            delta_col = self._resolve_loss_allowance_delta_column(collective)
             exp_col = self._find_column(collective, "amortizedCost")
             collectively_exposure = self._safe_sum(collective, "amortizedCost") if exp_col else 0.0
-            total_coll = self._safe_sum(collective, "onBalanceSheetReserveAdjusted") or 0.0
+            total_coll = self._safe_sum(collective, adj_col) if adj_col else 0.0
             adj_flag_col = self._instrument_result_adjusted_column(collective)
             if adj_flag_col and adj_flag_col in collective.columns:
                 m_true = self._mask_adjusted_true(collective, adj_flag_col)
                 g_false = collective[~m_true]
                 g_true = collective[m_true]
-                quant = self._safe_sum(g_false, "onBalanceSheetReserveUnadjusted") if unadj_col else 0.0
-                qual = (
-                    (g_true[adj_col].sum() - g_true[unadj_col].sum())
-                    if (adj_col and unadj_col and not g_true.empty)
-                    else 0.0
-                )
-                if not total_coll and (quant or qual):
-                    total_coll = float(quant) + float(qual)
+                if delta_col and delta_col in collective.columns:
+                    dc = pd.to_numeric(collective[delta_col], errors="coerce").fillna(0.0)
+                    quant = float(dc.loc[g_false.index].sum())
+                    qual = float(dc.loc[g_true.index].sum())
+                    total_coll = float(dc.sum())
+                else:
+                    quant = self._safe_sum(g_false, unadj_col) if unadj_col else 0.0
+                    qual = (
+                        (g_true[adj_col].sum() - g_true[unadj_col].sum())
+                        if (adj_col and unadj_col and not g_true.empty)
+                        else 0.0
+                    )
+                    if not total_coll and (quant or qual):
+                        total_coll = float(quant) + float(qual)
             else:
                 qual = (adj_col and unadj_col) and (collective[adj_col] - collective[unadj_col]).sum() or 0.0
-                quant = self._safe_sum(collective, "onBalanceSheetReserveUnadjusted")
+                quant = self._safe_sum(collective, unadj_col) if unadj_col else 0.0
                 if not total_coll:
                     total_coll = (quant + qual)
         else:
@@ -953,7 +1036,11 @@ class Model:
         if asc_col and df_current_with_ref is not None and not df_current_with_ref.empty:
             individual = df_current_with_ref[df_current_with_ref[asc_col].astype(str).str.strip().str.lower().str.contains("individual", na=False)]
             individually_exposure = self._safe_sum(individual, "amortizedCost")
-            individual_reserve = self._safe_sum(individual, "onBalanceSheetReserveAdjusted") or self._safe_sum(individual, "onBalanceSheetReserve")
+            ind_adj, _ = self._resolve_instrument_result_adj_unadj_columns(individual)
+            individual_reserve = (
+                (self._safe_sum(individual, ind_adj) if ind_adj else 0.0)
+                or self._safe_sum(individual, "onBalanceSheetReserve")
+            )
         else:
             individually_exposure = 0.0
             individual_reserve = 0.0
@@ -1097,27 +1184,38 @@ class Model:
                 collective = collective.copy()
                 collective["_methodology"] = collective.apply(lambda r: self._methodology_from_row(r, lr_col, pd_col, lgd_col), axis=1)
                 if not collective.empty:
-                    adj_col = self._find_column(collective, "onBalanceSheetReserveAdjusted")
-                    unadj_col = self._find_column(collective, "onBalanceSheetReserveUnadjusted")
+                    adj_col, unadj_col = self._resolve_instrument_result_adj_unadj_columns(collective)
+                    delta_col = self._resolve_loss_allowance_delta_column(collective)
+                    if not delta_col and (not adj_col or not unadj_col):
+                        print(
+                            "[hanmi_acl_report] collectivelyByMethodology: no lossAllowanceDelta and no adj/unadj "
+                            "reserve columns — split will be zero"
+                        )
                     ac_col = self._find_column(collective, "amortizedCost")
                     adj_flag_col = self._instrument_result_adjusted_column(collective)
                     for methodology, grp in collective.groupby("_methodology", dropna=False):
                         ac = self._safe_sum(grp, "amortizedCost") if ac_col else 0.0
-                        total = self._safe_sum(grp, "onBalanceSheetReserveAdjusted") if adj_col else 0.0
+                        total = self._safe_sum(grp, adj_col) if adj_col else 0.0
                         if adj_flag_col and adj_flag_col in collective.columns:
                             m_true = self._mask_adjusted_true(grp, adj_flag_col)
                             g_false = grp[~m_true]
                             g_true = grp[m_true]
-                            quant = self._safe_sum(g_false, "onBalanceSheetReserveUnadjusted") if unadj_col else 0.0
-                            qual = (
-                                (g_true[adj_col].sum() - g_true[unadj_col].sum())
-                                if (adj_col and unadj_col and not g_true.empty)
-                                else 0.0
-                            )
-                            if not total and (quant or qual):
-                                total = float(quant) + float(qual)
+                            if delta_col and delta_col in grp.columns:
+                                dc = pd.to_numeric(grp[delta_col], errors="coerce").fillna(0.0)
+                                quant = float(dc.loc[g_false.index].sum())
+                                qual = float(dc.loc[g_true.index].sum())
+                                total = float(dc.sum())
+                            else:
+                                quant = self._safe_sum(g_false, unadj_col) if unadj_col else 0.0
+                                qual = (
+                                    (g_true[adj_col].sum() - g_true[unadj_col].sum())
+                                    if (adj_col and unadj_col and not g_true.empty)
+                                    else 0.0
+                                )
+                                if not total and (quant or qual):
+                                    total = float(quant) + float(qual)
                         else:
-                            quant = self._safe_sum(grp, "onBalanceSheetReserveUnadjusted") if unadj_col else 0.0
+                            quant = self._safe_sum(grp, unadj_col) if unadj_col else 0.0
                             qual = (grp[adj_col].sum() - grp[unadj_col].sum()) if (adj_col and unadj_col) else 0.0
                             if not total:
                                 total = quant + qual
@@ -1200,15 +1298,23 @@ class Model:
             ref_sub = df_ref[right_on + [seg_col]].drop_duplicates()
             merged = df_res.merge(ref_sub, left_on=left_on, right_on=right_on, how="left")
             ac_col = self._find_column(merged, "amortizedCost")
-            quant_col = self._find_column(merged, "onBalanceSheetReserveUnadjusted")
+            quant_col = self._resolve_unadjusted_reserve_column(merged)
+            delta_col = self._resolve_loss_allowance_delta_column(merged)
             adj_flag_col = self._instrument_result_adjusted_column(merged)
             for portfolio, grp in merged.groupby(seg_col, dropna=False):
                 ac = self._safe_sum(grp, "amortizedCost") if ac_col else 0.0
                 if adj_flag_col and adj_flag_col in merged.columns:
-                    g_false = grp[~self._mask_adjusted_true(grp, adj_flag_col)]
-                    quant = self._safe_sum(g_false, "onBalanceSheetReserveUnadjusted") if quant_col else 0.0
+                    if delta_col and delta_col in grp.columns:
+                        g_false = grp[~self._mask_adjusted_true(grp, adj_flag_col)]
+                        quant = float(pd.to_numeric(g_false[delta_col], errors="coerce").fillna(0.0).sum())
+                    else:
+                        g_false = grp[~self._mask_adjusted_true(grp, adj_flag_col)]
+                        quant = self._safe_sum(g_false, quant_col) if quant_col else 0.0
                 else:
-                    quant = self._safe_sum(grp, "onBalanceSheetReserveUnadjusted") if quant_col else 0.0
+                    if delta_col and delta_col in grp.columns:
+                        quant = float(pd.to_numeric(grp[delta_col], errors="coerce").fillna(0.0).sum())
+                    else:
+                        quant = self._safe_sum(grp, quant_col) if quant_col else 0.0
                 rate = (quant / ac * 100.0) if ac else None
                 seg_display = self._normalize_segment_display(portfolio)
                 quantitative_by_segment["main"].append({
@@ -1270,19 +1376,23 @@ class Model:
                 continue
             ref_sub = df_ref[right_on + [seg_col]].drop_duplicates()
             merged = df_res.merge(ref_sub, left_on=left_on, right_on=right_on, how="left")
-            adj_col = self._find_column(merged, "onBalanceSheetReserveAdjusted")
-            unadj_col = self._find_column(merged, "onBalanceSheetReserveUnadjusted")
+            adj_col, unadj_col = self._resolve_instrument_result_adj_unadj_columns(merged)
+            delta_col = self._resolve_loss_allowance_delta_column(merged)
             ac_col = self._find_column(merged, "amortizedCost")
             adj_flag_col = self._instrument_result_adjusted_column(merged)
             for portfolio, grp in merged.groupby(seg_col, dropna=False):
                 ac = self._safe_sum(grp, "amortizedCost") if ac_col else 0.0
                 if adj_flag_col and adj_flag_col in merged.columns:
-                    g_true = grp[self._mask_adjusted_true(grp, adj_flag_col)]
-                    qual = (
-                        (g_true[adj_col].sum() - g_true[unadj_col].sum())
-                        if (adj_col and unadj_col and not g_true.empty)
-                        else 0.0
-                    )
+                    if delta_col and delta_col in grp.columns:
+                        g_true = grp[self._mask_adjusted_true(grp, adj_flag_col)]
+                        qual = float(pd.to_numeric(g_true[delta_col], errors="coerce").fillna(0.0).sum())
+                    else:
+                        g_true = grp[self._mask_adjusted_true(grp, adj_flag_col)]
+                        qual = (
+                            (g_true[adj_col].sum() - g_true[unadj_col].sum())
+                            if (adj_col and unadj_col and not g_true.empty)
+                            else 0.0
+                        )
                 else:
                     qual = (grp[adj_col].sum() - grp[unadj_col].sum()) if (adj_col and unadj_col) else 0.0
                 rate = (qual / ac * 100.0) if ac else None
@@ -1306,7 +1416,11 @@ class Model:
                 individual = merged[merged[asc_col].astype(str).str.strip().str.lower().str.contains("individual", na=False)]
                 if not individual.empty:
                     ac = self._safe_sum(individual, "amortizedCost")
-                    res = self._safe_sum(individual, "onBalanceSheetReserveAdjusted") or self._safe_sum(individual, "onBalanceSheetReserve")
+                    ind_adj, _ = self._resolve_instrument_result_adj_unadj_columns(individual)
+                    res = (
+                        (self._safe_sum(individual, ind_adj) if ind_adj else 0.0)
+                        or self._safe_sum(individual, "onBalanceSheetReserve")
+                    )
                     individual_analysis.append({
                         "evaluationType": "Individually Evaluated",
                         "amortizedCost": round(ac, 2),
@@ -1481,8 +1595,11 @@ class Model:
 
     def _fetch_and_write_adjustment_details(self):
         """
-        For the **current** (main / latest) analysis, GET Impairment Studio adjustment details and write
+        For **each** analysis in ``settings.analysisIds``, GET Impairment Studio adjustment details and write
         ``adjustment_details.json`` into the report dir (included in report_response_payload when enabled).
+
+        Output shape: ``{ currentAnalysisId, analysisIds, adjustments (current period list), byAnalysisId }``.
+        Legacy consumers that expect a top-level JSON array still work if they read ``adjustments``.
 
         API: ``{IMPAIRMENT_STUDIO_API_BASE}/adjustment/1.0/analyses/{id}/adjustmentdetails`` (Bearer JWT).
         Opt out: ``settings.fetchAdjustmentDetails`` = false.
@@ -1504,27 +1621,52 @@ class Model:
             return
         from .adjustment_api import fetch_adjustment_details_json
 
-        print(
-            "[Model run] adjustment details: GET (Authorization: Bearer <JWT>, same token as Cappy) analysisId={}".format(
-                current_id
+        by_analysis_id = {}
+        any_ok = False
+        for aid in analysis_ids:
+            print(
+                "[Model run] adjustment details: GET analysisId={} (Bearer JWT)".format(aid)
             )
-        )
-        data = fetch_adjustment_details_json(self._jwt, current_id)
+            data = fetch_adjustment_details_json(self._jwt, aid)
+            if data is not None:
+                by_analysis_id[str(aid)] = data
+                any_ok = True
+            else:
+                by_analysis_id[str(aid)] = None
+
         out_path = os.path.join(report_dir, "adjustment_details.json")
         os.makedirs(report_dir, exist_ok=True)
-        if data is None:
+        if not any_ok:
             err_doc = {
                 "_error": "adjustment_details_unavailable",
-                "analysisId": str(current_id),
+                "currentAnalysisId": str(current_id),
+                "analysisIds": [str(a) for a in analysis_ids],
                 "adjustments": [],
+                "byAnalysisId": {k: [] for k in by_analysis_id},
             }
             with open(out_path, "w", encoding="utf-8") as f:
                 json.dump(err_doc, f, indent=2)
             print("[Model run] adjustment details: wrote failure stub -> {}".format(out_path))
             return
+
+        cur_list = by_analysis_id.get(str(current_id))
+        if cur_list is None:
+            cur_list = []
+        out_doc = {
+            "currentAnalysisId": str(current_id),
+            "analysisIds": [str(a) for a in analysis_ids],
+            "adjustments": cur_list if isinstance(cur_list, list) else [],
+            "byAnalysisId": {k: (v if isinstance(v, list) else []) for k, v in by_analysis_id.items()},
+        }
         with open(out_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, default=str)
-        print("[Model run] adjustment details: wrote {} record(s) -> {}".format(len(data), out_path))
+            json.dump(out_doc, f, indent=2, default=str)
+        n_cur = len(out_doc["adjustments"])
+        n_total = sum(len(v) for v in out_doc["byAnalysisId"].values() if isinstance(v, list))
+        print(
+            "[Model run] adjustment details: wrote current={} rows, {} total across analyses -> {}".format(
+                n_cur, n_total, out_path
+            )
+        )
 
     def _build_report_response_payload(self):
         """
