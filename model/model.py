@@ -172,9 +172,9 @@ class Model:
 
         print("[Model run] Step 1: List S3 folders")
         if self.model_run_parameters.use_per_analysis_s3_download():
-            # Placeholder inputPath (e.g. _library/input) has no objects; parquet lives at bucket-root output/.
+            # Tenant CSV layout lives under bucket-root export/ (one file per category per analysis).
             self.io_session.list_and_print_s3_folders(
-                prefix=self.io_session.OUTPUT_ROOT_BASE + "/",
+                prefix=self.io_session.EXPORT_BASE + "/",
                 list_object_keys=False,
             )
         else:
@@ -182,7 +182,7 @@ class Model:
 
         print("[Model run] Step 2: Get source input files from S3")
         self.io_session.getSourceInputFiles()
-        print("[Model run] Step 2 done; Step 3+ hold full parquet data in memory (OOM/SIGKILL => increase worker RAM).")
+        print("[Model run] Step 2 done; Step 3+ hold loaded table data in memory (OOM/SIGKILL => increase worker RAM).")
 
         milestone_banner("building reports (in-memory)")
         print("[Model run] Step 3: Build quarterly summary report (current/prior from analysisIds, all doc sections)")
@@ -609,8 +609,31 @@ class Model:
             return None, n_all
         return selected, n_all
 
+    def _csv_columns_to_read(self, file_path, category):
+        """Return (columns, header_col_count) for read_csv(usecols=...), or (None, n) to read full file."""
+        try:
+            df0 = pd.read_csv(file_path, nrows=0)
+        except Exception as e:
+            self.logger.debug("CSV header read failed for %s: %s", file_path, e)
+            return None, None
+        names = list(df0.columns)
+        n_all = len(names)
+        wanted = REPORT_PARQUET_COLS_NORMALIZED.get(category)
+        if not wanted:
+            return None, n_all
+        selected = [n for n in names if _parquet_col_key(n) in wanted]
+        if not selected:
+            self.logger.warning(
+                "CSV prune: 0 column overlap for %s file=%s (file has %d cols); reading full file",
+                category,
+                os.path.basename(file_path),
+                n_all,
+            )
+            return None, n_all
+        return selected, n_all
+
     def _load_parquet_for_analysis(self, category, analysis_id, filter_summary=False):
-        """Load all parquet under that category dir for one analysis_id. If filter_summary, filter to scenarioIdentifier=Summary."""
+        """Load category table for one analysis: prefer {category}.csv in the category dir, else all parquet under that dir."""
         cache_key = (category, str(analysis_id), bool(filter_summary))
         if cache_key in self._parquet_load_cache:
             return self._parquet_load_cache[cache_key]
@@ -627,6 +650,25 @@ class Model:
             self._parquet_load_cache[cache_key] = None
             return None
         load_dir = input_paths[idx]
+        csv_path = os.path.join(load_dir, "{}.csv".format(category))
+        if os.path.isfile(csv_path):
+            try:
+                cols, n_all = self._csv_columns_to_read(csv_path, category)
+                if cols is not None and n_all is not None and len(cols) < n_all:
+                    print(
+                        "[_load_csv] column_prune category={} analysisId={} cols_read={}/{}".format(
+                            category, analysis_id, len(cols), n_all
+                        )
+                    )
+                df = pd.read_csv(csv_path, usecols=cols) if cols is not None else pd.read_csv(csv_path, low_memory=False)
+                if filter_summary:
+                    df = self._filter_summary_scenario(df)
+                self._parquet_load_cache[cache_key] = df
+                return df
+            except Exception as e:
+                self.logger.warning("Failed to read CSV %s: %s", csv_path, e)
+                self._parquet_load_cache[cache_key] = None
+                return None
         files = glob.glob(os.path.join(load_dir, "**", "*.parquet"), recursive=True)
         if not files:
             print("[_load_parquet] no parquet in {} (category={}, analysisId={})".format(load_dir, category, analysis_id))

@@ -1,52 +1,67 @@
-# Input Sources – Metadata and Macro Variables
+# Input Sources – Export CSV, macro parquet, metadata
 
-Short reference for the optional analysis metadata and macroEconomicVariableInput used by the Hanmi ACL Quarterly report.
-
----
-
-## 1. Optional analysis metadata file
-
-- Purpose: Define which analysis ID is current, prior, prior year, and optionally more quarters (for multi-quarter tables).
-- When: Optional. If absent, keep current behavior: first analysisId = current, second = prior.
-- Where it can come from:
-  - Optional file under execution inputPath (e.g. `analysis_metadata.json`) – same optional payload that we already treat as non-fatal when empty.
-  - Or a key in model run parameters (e.g. `settings.analysisRoles`).
-- Proposed shape (example):
-  ```json
-  {
-    "current": "<analysis_id_for_Q4_25>",
-    "prior": "<analysis_id_for_Q3_25>",
-    "priorYear": "<analysis_id_for_Q4_24>",
-    "quarters": ["<Q1_25>", "<Q2_25>", "<Q3_25>", "<Q4_25>"]
-  }
-  ```
-- Usage: Report builder uses current and prior to label columns and compute Q→Q and Y→Y changes. priorYear is the analysis ID for the same quarter last year. quarters is the ordered list of analysis IDs for prior quarters we retrieve data from to build multi-quarter tables (e.g. Q4 ’24, Q3 ’25, Q4 ’25); these IDs should be among the analysis IDs returned by the callback (or otherwise available in inputPaths).
+Short reference for tenant S3 inputs and optional analysis metadata for the Hanmi ACL Quarterly report.
 
 ---
 
-## 2. macroEconomicVariableInput (Baseline)
+## 1. Export CSV (instrument* + analysisDetails)
 
-- Category: macroEconomicVariableInput
-- Root: input (not `output/` or `export/`). Full path uses asOfDate from the main analysis’s analysisDetails and scenarioidentifier=BASE.
-- Path: `input/macroeconomicVariableInput/asofdate=YYYY-MM-DD/scenarioidentifier=BASE/`
-  - asOfDate is taken from the BASE scenario in analysisDetails for the main (current) analysis: `analysisDetails.scenarios[]` where `name === "BASE"` → use `asOfDate`. See `sample/analysisDetails.json`. If missing, fallback to `analysisDetails.reportingDate`, then legacy path without asofdate.
-- Filter: Use Baseline scenario only (`scenarioidentifier=BASE`).
-- Attributes: At least `macroeconomicVariableName`, `valueDate`, `macroeconomicVariableValue`. Optional: `asOfDate`, `databuffetMnemonic`, etc. (see datamodel).
-- Variable names: Resolve report labels via `sample/macroeconomicVariable.csv` (column `macroeconomicVariableName` and any mnemonic columns).
+Bucket-root paths. One CSV per category per analysis for **instrumentResult**, **instrumentReporting**, and **instrumentReference** only.
+
+| File | S3 key |
+|------|--------|
+| analysisDetails | `export/analysisidentifier={id}/analysisDetails.json` |
+| instrumentResult | `export/analysisidentifier={id}/instrumentResult/instrumentResult.csv` |
+| instrumentReporting | `export/analysisidentifier={id}/instrumentReporting/instrumentReporting.csv` |
+| instrumentReference | `export/analysisidentifier={id}/instrumentReference/instrumentReference.csv` |
+
+**Macro is not exported here** — see §2.
+
+Column names should match the Impairment Studio datamodel. The model applies the same column allowlist as for parquet where possible.
+
+**Local mirror:** `inputPaths` per category; filename `{category}.csv` in that category directory.
+
+**Settings:** `settings.liveS3InputsByAnalysisId` + `settings.exportCsvInputs` (default **true**). If `exportCsvInputs` is false, the run raises with a pointer to this doc.
 
 ---
 
-## 3. S3/local path summary
+## 2. macroEconomicVariableInput (parquet under `input/`)
 
-| Data | Root | Path pattern (conceptual) |
-|------|------|---------------------------|
-| instrumentResult | output | `output/instrumentResult/analysisidentifier={id}/scenarioidentifier=Summary/` |
-| instrumentReporting | output | `output/instrumentReporting/analysisidentifier={id}/` |
-| instrumentReference | output | `output/instrumentReference/analysisidentifier={id}/` |
+**Not** provided as export CSV. Downloads remain under the **input** root, **Baseline** scenario, using **asOfDate** from the main (current) analysis’s `analysisDetails` (BASE scenario), same as before:
+
+- `input/macroeconomicVariableInput/asofdate=YYYY-MM-DD/scenarioidentifier=BASE/*.parquet`
+- Fallback if date missing: `input/macroeconomicVariableInput/analysisidentifier={id}/scenarioidentifier=BASE/` (legacy).
+
+Only the **current/main** analysis index receives macro parquet (Hanmi ACL reads macro for current only).
+
+`model.Model._load_parquet_for_analysis` loads `**/*.parquet` in the macro local dir (no `{category}.csv` from export).
+
+---
+
+## 3. Optional analysis metadata file
+
+- Purpose: Define which analysis ID is current, prior, prior year, and optional quarters.
+- When: Optional. If absent: first analysisId = current, second = prior.
+- Sources: optional file under execution `inputPath`, or `settings.analysisRoles` / `settings.analyses`.
+- Example shape: see previous revisions of this doc or `docs/REPORT_MAPPING.md`.
+
+---
+
+## 4. Legacy: `output/` parquet shards
+
+See **`docs/INPUT_LAYOUT_OUTPUT_PARQUET_LEGACY.md`** for the old multi-parquet layout under `output/` for instrument*. The model still **reads parquet** locally if `{category}.csv` is absent (e.g. tests).
+
+---
+
+## 5. Path summary
+
+| Data | Root | Pattern |
+|------|------|---------|
+| instrumentResult / Reporting / Reference | export | `export/analysisidentifier={id}/.../{category}.csv` |
 | analysisDetails | export | `export/analysisidentifier={id}/analysisDetails.json` |
-| macroEconomicVariableInput | input | `input/macroeconomicVariableInput/asofdate=YYYY-MM-DD/scenarioidentifier=BASE/` (date from analysisDetails main analysis, BASE scenario) |
-| Optional payload (e.g. metadata) | execution inputPath | As today: list/download under `settings.inputPath`; optional (empty = no failure). |
+| macroEconomicVariableInput | input | `input/macroeconomicVariableInput/asofdate={date}/scenarioidentifier=BASE/*.parquet` |
+| Optional payload | execution inputPath | As today under `settings.inputPath` |
 
 ---
 
-*See `docs/REPORT_MAPPING.md` for how these feed into each report section and `docs/IMPLEMENTATION_PLAN.md` for implementation order.*
+*See `docs/REPORT_MAPPING.md` and `docs/IMPLEMENTATION_PLAN.md`.*

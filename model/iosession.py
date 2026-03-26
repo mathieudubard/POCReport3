@@ -44,8 +44,8 @@ class ModelRunParameters :
 
     def use_per_analysis_s3_download(self):
         """
-        True when inputs should be loaded per analysis from bucket-root paths (output/..., export/...),
-        using JWT/S3 — same layout as after a successful settings callback.
+        True when inputs should be loaded per analysis from bucket-root paths (export/ CSV layout by default),
+        using JWT/S3 — same idea as after a successful settings callback.
 
         - callBack True: legacy path (HTTP callback merged analysisIds / inputPaths).
         - callBack False but settings.liveS3InputsByAnalysisId True and analysisIds non-empty:
@@ -57,6 +57,16 @@ class ModelRunParameters :
         if not ids:
             return False
         return bool(self.settings.get("liveS3InputsByAnalysisId"))
+
+    def use_export_csv_inputs(self):
+        """
+        When True with use_per_analysis_s3_download(), fetch one CSV per category from
+        export/analysisidentifier={id}/{category}/{category}.csv (see docs/INPUT_SOURCES.md).
+        Default True. Set settings.exportCsvInputs to false only if reverting to local parquet testing.
+        """
+        if not self.use_per_analysis_s3_download():
+            return False
+        return bool(self.settings.get("exportCsvInputs", True))
 
     def _set_additional_settings(self, model_run_parameter_json, credentials) :
         settingsCallbackUrlParam = next((s for s in self.model_settings if s == 'settingsCallbackUrl'), None)
@@ -589,10 +599,10 @@ class IOSession :
         self.logger.debug(f'Contents of {os.path.basename(s3_json_key)}:\n{model_run_parameters_json}')
         return ModelRunParameters(model_run_parameters_json, file, credentials)
 
-    # Only bucket-root "output/" with path: output/instrumentResult/analysisidentifier={id}/scenarioidentifier=Summary/
+    # Legacy bucket-root "output/" parquet layout (documented only; not used when exportCsvInputs is true).
     OUTPUT_ROOT_BASE = "output"
     SCENARIO_SUMMARY_SEGMENT = "scenarioidentifier=Summary"
-    # analysisDetails per analysis: export/analysisidentifier={id}/analysisDetails.json (same bucket root)
+    # Primary layout: export/analysisidentifier={id}/… — see docs/INPUT_SOURCES.md, docs/INPUT_LAYOUT_OUTPUT_PARQUET_LEGACY.md
     EXPORT_BASE = "export"
     # Macro variables: under input root (not output/export), Baseline scenario only (sample/scenario.csv: BASE)
     INPUT_ROOT_BASE = "input"
@@ -696,7 +706,12 @@ class IOSession :
     def getSourceInputFiles(self) :
         print("[getSourceInputFiles] per_analysis_s3={}".format(self.model_run_parameters.use_per_analysis_s3_download()))
         if self.model_run_parameters.use_per_analysis_s3_download():
-            milestone_banner("downloading inputs from S3 (per analysis)")
+            if not self.model_run_parameters.use_export_csv_inputs():
+                raise RuntimeError(
+                    "Per-analysis tenant S3 now expects export/ CSV layout (settings.exportCsvInputs, default True). "
+                    "See docs/INPUT_SOURCES.md. Historical output/ parquet shards: docs/INPUT_LAYOUT_OUTPUT_PARQUET_LEGACY.md."
+                )
+            milestone_banner("downloading inputs from S3 (per analysis, export CSV)")
             source_input_directory = self.local_directories.get('inputPaths')
             input_files = {}
             analysis_ids = self.model_run_parameters.settings.get('analysisIds', [])
@@ -726,113 +741,47 @@ class IOSession :
                 )
             )
 
-            n_result_parquet = n_reporting_parquet = n_reference_parquet = 0
+            n_result_csv = n_reporting_csv = n_reference_csv = 0
             n_analysis_details_ok = n_analysis_details_missing = 0
             n_macro_parquet = 0
-            # Per-analysis parquet file counts (row counts come later in model build logs).
             per_analysis = [
                 {
                     "analysisId": str(aid),
-                    "instrumentResult_parquet": 0,
-                    "instrumentReporting_parquet": 0,
-                    "instrumentReference_parquet": 0,
+                    "instrumentResult_csv": 0,
+                    "instrumentReporting_csv": 0,
+                    "instrumentReference_csv": 0,
                     "macro_parquet": 0,
                     "analysisDetails_ok": 0,
                 }
                 for aid in (analysis_ids or [])
             ]
 
-            base = self.OUTPUT_ROOT_BASE
-            scenario = self.SCENARIO_SUMMARY_SEGMENT
-            instrument_result_paths = source_input_directory.get("instrumentResult") or []
-            for idx, aid in enumerate(analysis_ids or []):
-                if idx >= len(instrument_result_paths):
-                    break
-                local_dir = instrument_result_paths[idx]
-                os.makedirs(local_dir, exist_ok=True)
-                prefix = "{}/instrumentResult/analysisidentifier={}/{}/".format(base, aid, scenario)
-                keys = self._get_s3_object_keys(prefix)
-                parquet_keys = [k for k in keys if k.endswith(".parquet")]
-                nr = len(parquet_keys)
-                n_result_parquet += nr
-                if idx < len(per_analysis):
-                    per_analysis[idx]["instrumentResult_parquet"] = nr
-                if not parquet_keys:
-                    self.logger.info(
-                        "[Cappy/S3] instrumentResult: no .parquet under prefix=%s (listed_keys=%d)",
-                        prefix,
-                        len(keys),
-                    )
-                batch = []
-                for s3_key in parquet_keys:
-                    # Preserve subpath (e.g. adjusted=true/part-....parquet) so part files in different folders do not overwrite.
-                    rel = s3_key[len(prefix):] if s3_key.startswith(prefix) else os.path.basename(s3_key)
-                    local_path = os.path.join(local_dir, rel.replace("/", os.sep))
-                    os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                    batch.append((s3_key, local_path))
-                self._s3_download_batch(batch)
-                for s3_key in parquet_keys:
-                    rel = s3_key[len(prefix):] if s3_key.startswith(prefix) else os.path.basename(s3_key)
-                    local_path = os.path.join(local_dir, rel.replace("/", os.sep))
-                    dict_key = os.path.splitext(rel.replace("\\", "__").replace("/", "__"))[0]
-                    input_files.update({dict_key: local_path})
+            def _export_csv_key(aid, category):
+                return "{}/analysisidentifier={}/{}/{}.csv".format(self.EXPORT_BASE, aid, category, category)
 
-            # Download instrumentReporting: output/instrumentReporting/analysisidentifier={id}/ (parquet files directly under, no extra partition)
-            instrument_reporting_paths = source_input_directory.get("instrumentReporting") or []
-            for idx, aid in enumerate(analysis_ids or []):
-                if idx >= len(instrument_reporting_paths):
-                    break
-                local_dir = instrument_reporting_paths[idx]
-                os.makedirs(local_dir, exist_ok=True)
-                prefix = "{}/instrumentReporting/analysisidentifier={}/".format(base, aid)
-                keys = self._get_s3_object_keys(prefix)
-                parquet_keys = [k for k in keys if k.endswith(".parquet")]
-                np_ = len(parquet_keys)
-                n_reporting_parquet += np_
-                if idx < len(per_analysis):
-                    per_analysis[idx]["instrumentReporting_parquet"] = np_
-                if not parquet_keys:
-                    self.logger.info(
-                        "[Cappy/S3] instrumentReporting: no .parquet under prefix=%s (listed_keys=%d)",
-                        prefix,
-                        len(keys),
-                    )
-                batch = []
-                for s3_key in parquet_keys:
-                    rel = s3_key[len(prefix):] if s3_key.startswith(prefix) else os.path.basename(s3_key)
-                    local_path = os.path.join(local_dir, rel.replace("/", os.sep))
-                    os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                    batch.append((s3_key, local_path))
-                self._s3_download_batch(batch)
-
-            # Download instrumentReference: output/instrumentReference/analysisidentifier={id}/ (partitioned by portfolioidentifier=.../; get all parquet from all subfolders)
-            instrument_reference_paths = source_input_directory.get("instrumentReference") or []
-            for idx, aid in enumerate(analysis_ids or []):
-                if idx >= len(instrument_reference_paths):
-                    break
-                local_dir = instrument_reference_paths[idx]
-                os.makedirs(local_dir, exist_ok=True)
-                prefix = "{}/instrumentReference/analysisidentifier={}/".format(base, aid)
-                keys = self._get_s3_object_keys(prefix)
-                parquet_keys = [k for k in keys if k.endswith(".parquet")]
-                nref = len(parquet_keys)
-                n_reference_parquet += nref
-                if idx < len(per_analysis):
-                    per_analysis[idx]["instrumentReference_parquet"] = nref
-                if not parquet_keys:
-                    self.logger.info(
-                        "[Cappy/S3] instrumentReference: no .parquet under prefix=%s (listed_keys=%d)",
-                        prefix,
-                        len(keys),
-                    )
-                batch = []
-                for s3_key in parquet_keys:
-                    # Preserve subpath under analysisidentifier={id}/ to avoid overwriting (e.g. portfolioidentifier=CRE/part-*.parquet)
-                    rel = s3_key[len(prefix):] if s3_key.startswith(prefix) else os.path.basename(s3_key)
-                    local_path = os.path.join(local_dir, rel.replace("/", os.sep))
-                    os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                    batch.append((s3_key, local_path))
-                self._s3_download_batch(batch)
+            def _fetch_one_csv(s3_key, local_path, idx, field):
+                """Download single CSV; on success increment per_analysis and totals."""
+                nonlocal n_result_csv, n_reporting_csv, n_reference_csv
+                parent = os.path.dirname(local_path)
+                if parent:
+                    os.makedirs(parent, exist_ok=True)
+                if self._tenant_s3_inputs_enabled():
+                    self._downloadFile(s3_key, local_path, raise_on_error=False)
+                else:
+                    self._safeCopyFile(s3_key, local_path)
+                if os.path.isfile(local_path) and os.path.getsize(local_path) > 0:
+                    if field == "instrumentResult":
+                        n_result_csv += 1
+                    elif field == "instrumentReporting":
+                        n_reporting_csv += 1
+                    elif field == "instrumentReference":
+                        n_reference_csv += 1
+                    if idx < len(per_analysis):
+                        per_analysis[idx][field + "_csv"] = 1
+                    input_files["{}__{}".format(aid, os.path.basename(local_path))] = local_path
+                    return True
+                self.logger.warning("[Cappy/S3] missing or empty CSV: %s -> %s", s3_key, local_path)
+                return False
 
             report_dir = self.local_directories.get("outputPaths", {}).get("report")
             if report_dir:
@@ -856,25 +805,51 @@ class IOSession :
                             local_path,
                         )
 
-            # Download macroEconomicVariableInput from input root: path uses asofdate from analysisDetails (main analysis) and scenarioidentifier=BASE
-            macro_paths = source_input_directory.get("macroEconomicVariableInput") or []
             main_analysis_id = (self.model_run_parameters.settings.get("analysisRoles") or {}).get("current")
             if main_analysis_id is None and analysis_ids:
                 main_analysis_id = analysis_ids[0]
-            scenario_asof_date = self._get_macro_scenario_date_from_analysis_details(report_dir, main_analysis_id)
-            if not scenario_asof_date:
-                print("[getSourceInputFiles] macro: no asOfDate from analysisDetails (will try default path)")
-            # Hanmi ACL loads macro only for the current analysis (_load_parquet_for_analysis(..., current_id)).
-            # Same macro dataset was previously downloaded once per analysis index — duplicate GETs.
             macro_target_idx = 0
             for _mi, _maid in enumerate(analysis_ids or []):
                 if str(_maid) == str(main_analysis_id):
                     macro_target_idx = _mi
                     break
-            if analysis_ids and macro_paths:
+
+            instrument_result_paths = source_input_directory.get("instrumentResult") or []
+            instrument_reporting_paths = source_input_directory.get("instrumentReporting") or []
+            instrument_reference_paths = source_input_directory.get("instrumentReference") or []
+            macro_paths = source_input_directory.get("macroEconomicVariableInput") or []
+
+            print(
+                "[getSourceInputFiles] layout=export_csv for instrument* (export/.../category.csv); "
+                "macroEconomicVariableInput remains input/ parquet (asofdate/BASE); "
+                "legacy output/ parquet: docs/INPUT_LAYOUT_OUTPUT_PARQUET_LEGACY.md"
+            )
+
+            for idx, aid in enumerate(analysis_ids or []):
+                if idx >= len(instrument_result_paths):
+                    break
+                lp = os.path.join(instrument_result_paths[idx], "instrumentResult.csv")
+                _fetch_one_csv(_export_csv_key(aid, "instrumentResult"), lp, idx, "instrumentResult")
+
+            for idx, aid in enumerate(analysis_ids or []):
+                if idx >= len(instrument_reporting_paths):
+                    break
+                lp = os.path.join(instrument_reporting_paths[idx], "instrumentReporting.csv")
+                _fetch_one_csv(_export_csv_key(aid, "instrumentReporting"), lp, idx, "instrumentReporting")
+
+            for idx, aid in enumerate(analysis_ids or []):
+                if idx >= len(instrument_reference_paths):
+                    break
+                lp = os.path.join(instrument_reference_paths[idx], "instrumentReference.csv")
+                _fetch_one_csv(_export_csv_key(aid, "instrumentReference"), lp, idx, "instrumentReference")
+
+            # macroEconomicVariableInput: not in export CSV — parquet under input/ (asofdate from analysisDetails, BASE).
+            scenario_asof_date = self._get_macro_scenario_date_from_analysis_details(report_dir, main_analysis_id)
+            if not scenario_asof_date:
+                print("[getSourceInputFiles] macro: no asOfDate from analysisDetails (will try default path)")
+            if macro_paths and analysis_ids:
                 print(
-                    "[getSourceInputFiles] macro: fetching parquet only for analysis index {} "
-                    "(main/current analysisId={}; not repeated for prior/additional analyses)".format(
+                    "[getSourceInputFiles] macro parquet: analysis index {} only (main/current analysisId={})".format(
                         macro_target_idx,
                         main_analysis_id,
                     )
@@ -887,7 +862,6 @@ class IOSession :
                 local_dir = macro_paths[idx]
                 os.makedirs(local_dir, exist_ok=True)
                 if self._tenant_s3_inputs_enabled():
-                    # Path: input/macroeconomicVariableInput/asofdate=YYYY-MM-DD/scenarioidentifier=BASE/
                     cat_folder = "macroeconomicVariableInput"
                     try_date_used = scenario_asof_date
                     if not try_date_used:
@@ -898,7 +872,6 @@ class IOSession :
                             prefix = "{}/{}/asofdate={}/scenarioidentifier={}/".format(
                                 self.INPUT_ROOT_BASE, cat_folder, try_date, self.MACRO_SCENARIO_BASELINE)
                         else:
-                            # Fallback: no asofdate segment (legacy)
                             prefix = "{}/{}/analysisidentifier={}/scenarioidentifier={}/".format(
                                 self.INPUT_ROOT_BASE, "macroEconomicVariableInput", aid, self.MACRO_SCENARIO_BASELINE)
                         keys = self._get_s3_object_keys(prefix)
@@ -917,7 +890,6 @@ class IOSession :
                     if not parquet_keys:
                         print("[getSourceInputFiles] macro: no parquet at input/.../asofdate=.../scenarioidentifier=BASE/")
                 else:
-                    # Local mode: copy from test folder if present (same prefix structure under test input path)
                     pass
 
             input_directory = self.local_directories.get('inputPath')
@@ -935,12 +907,13 @@ class IOSession :
                         file = self._downloadFile(rem_file_path, loc_file_path)
 
             _s3_sum = (
-                "[getSourceInputFiles][Cappy/S3] summary: instrumentResult_parquet={} instrumentReporting_parquet={} "
-                "instrumentReference_parquet={} analysisDetails_ok={} analysisDetails_missing={} macro_parquet={}"
+                "[getSourceInputFiles][Cappy/S3] summary: export_csv instrumentResult_csv={} "
+                "instrumentReporting_csv={} instrumentReference_csv={} "
+                "analysisDetails_ok={} analysisDetails_missing={} macro_parquet={} (input/ BASE)"
             ).format(
-                n_result_parquet,
-                n_reporting_parquet,
-                n_reference_parquet,
+                n_result_csv,
+                n_reporting_csv,
+                n_reference_csv,
                 n_analysis_details_ok,
                 n_analysis_details_missing,
                 n_macro_parquet,
@@ -950,9 +923,9 @@ class IOSession :
             for st in per_analysis:
                 line = (
                     "[getSourceInputFiles] by_analysis analysisId={analysisId} "
-                    "instrumentResult_parquet={instrumentResult_parquet} "
-                    "instrumentReporting_parquet={instrumentReporting_parquet} "
-                    "instrumentReference_parquet={instrumentReference_parquet} "
+                    "instrumentResult_csv={instrumentResult_csv} "
+                    "instrumentReporting_csv={instrumentReporting_csv} "
+                    "instrumentReference_csv={instrumentReference_csv} "
                     "macro_parquet={macro_parquet} analysisDetails_ok={analysisDetails_ok}"
                 ).format(**st)
                 self.logger.info(line)

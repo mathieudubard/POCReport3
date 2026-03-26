@@ -2,7 +2,7 @@
 Lean entry point for library-style use: JWT + analysis IDs → download inputs from S3 via Cappy, build reports, return JSON.
 
 Uses ``settings.libraryMode`` so :meth:`model.model.Model.run` skips zip creation and all S3 uploads (outputs and log).
-Parquet and ``analysisDetails`` still use bucket-root layouts in ``iosession`` (``output/``, ``export/``, ``input/``).
+Per-analysis inputs: ``export/`` CSVs for instrument* + ``analysisDetails.json``; macro remains ``input/.../macroeconomicVariableInput/.../BASE`` parquet. See ``docs/INPUT_SOURCES.md``. Legacy ``output/`` instrument parquet: ``docs/INPUT_LAYOUT_OUTPUT_PARQUET_LEGACY.md``.
 
 Placeholder ``inputPath`` / ``outputPaths`` / ``logPath`` values exist only so ``ModelRunParameters`` / local temp dirs
 initialize; they are not used as upload targets in library mode.
@@ -118,6 +118,7 @@ def build_interactive_mrp(
         "reportingDate": pd.Timestamp.utcnow().strftime("%Y-%m-%d"),
         "scenarios": [],
         "liveS3InputsByAnalysisId": True,
+        "exportCsvInputs": True,
         "returnReportsInResponse": True,
         "libraryMode": True,
     }

@@ -14,27 +14,24 @@ Compact context for agents. See README.md for full project layout.
 
 ## What’s implemented (done so far)
 
-1. S3 input source (single path)  
-   Inputs are read only from bucket-root `output/`, same analysisIdentifier pattern for all three categories:
-   - instrumentResult: `output/instrumentResult/analysisidentifier={id}/scenarioidentifier=Summary/` (parquet under that prefix, e.g. `.../adjusted=true/*.snappy.parquet`).
-   - instrumentReporting: `output/instrumentReporting/analysisidentifier={id}/` — parquet files directly under that prefix (no extra partition).
-   - instrumentReference: `output/instrumentReference/analysisidentifier={id}/` — partitioned by portfolio; all parquet from all subfolders are downloaded (subfolder structure preserved locally to avoid overwrites).
-   - macroEconomicVariableInput: `input/macroeconomicVariableInput/asofdate=YYYY-MM-DD/scenarioidentifier=BASE/` — asOfDate from main analysis’s analysisDetails (BASE scenario); downloaded when callback is True.
+1. S3 input source (per analysis, tenant bucket)  
+   **Primary:** bucket-root `export/` — one CSV per category per analysis for **instrumentResult, instrumentReporting, instrumentReference** (see `docs/INPUT_SOURCES.md`); `export/.../analysisDetails.json` → report dir as `analysisDetails_{id}.json`.
+   **Macro:** not in export — parquet under `input/macroeconomicVariableInput/asofdate=.../scenarioidentifier=BASE/` (asOfDate from current analysis `analysisDetails`), same as before; only main/current analysis index is downloaded.
+   - `settings.exportCsvInputs` defaults true (with `liveS3InputsByAnalysisId`).  
+   **Legacy instrument* parquet:** multi-parquet under `output/` — `docs/INPUT_LAYOUT_OUTPUT_PARQUET_LEGACY.md`. Local runs can still use parquet if `{category}.csv` is absent (`model.py` falls back to `**/*.parquet`).
 
 2. Callback mode  
    When `settingsCallbackUrl` is present in the run parameters, the callback is run (no need for `settingsCallbackUrl` in `datasets.settings`). That populates `inputPaths` and `analysisIds`.
 
 3. getSourceInputFiles (iosession.py)  
-   - instrumentResult: For each analysis ID, list/download from `output/instrumentResult/analysisidentifier={id}/scenarioidentifier=Summary/` into that analysis’s local `instrumentResult` dir.
-   - instrumentReporting: For each analysis ID, list all `*.parquet` under `output/instrumentReporting/analysisidentifier={id}/` (no subfolder) and download into `inputPaths/instrumentReporting` dir per analysis.
-   - instrumentReference: For each analysis ID, list all `*.parquet` under `output/instrumentReference/analysisidentifier={id}/` (including all `portfolioidentifier=.../` subfolders) and download into `inputPaths/instrumentReference` dir per analysis; relative subpath preserved locally to avoid name clashes.
-   - create_io_directories creates local dirs for `instrumentResult`, `instrumentReporting`, `instrumentReference`, and `macroEconomicVariableInput` from `analysisIds` when callback is True.
+   - **Export CSV mode (default for live S3 per analysis):** download fixed keys under `export/...` for instrument* CSVs and `analysisDetails.json`. **Macro:** list/download parquet from `input/macroeconomicVariableInput/asofdate=.../BASE/` (not export). See `docs/INPUT_SOURCES.md`.
+   - create_io_directories creates local dirs for `instrumentResult`, `instrumentReporting`, `instrumentReference`, and `macroEconomicVariableInput` from `analysisIds` when using per-analysis inputs.
    - Non-callback path: still uses `inputPath` with `custInputs` and downloads from execution input.
 
 4. Report step (model.py)  
-   - build_quarterly_summary_report() (Step 3): Builds `quarterly_summary_report.json`. Resolves current/prior/priorYear and chronological quarters from analysisDetails dates via `_resolve_analysis_roles_from_dates()`; then uses `_get_analysis_roles()`. Section (1) Changes to ACL uses prior/current reserves and chargeOffs/recoveries/provision from instrumentReporting. Sections (2)–(3) join instrumentResult with instrumentReference on instrumentIdentifier for ascImpairmentEvaluation. Helper: `_load_parquet_for_analysis()`, `_find_column()`, `_filter_summary_scenario()`, `_safe_sum()`.
+   - build_quarterly_summary_report() (Step 3): Builds `quarterly_summary_report.json`. Resolves current/prior/priorYear and chronological quarters from analysisDetails dates via `_resolve_analysis_roles_from_dates()`; then uses `_get_analysis_roles()`. Section (1) Changes to ACL uses prior/current reserves and chargeOffs/recoveries/provision from instrumentReporting. Sections (2)–(3) join instrumentResult with instrumentReference on instrumentIdentifier for ascImpairmentEvaluation. Helper: `_load_parquet_for_analysis()` (loads `{category}.csv` when present, else parquet glob), `_find_column()`, `_filter_summary_scenario()`, `_safe_sum()`.
    - build_hanmi_acl_quarterly_report() (Step 3b): Builds `hanmi_acl_quarterly_report.json` with sections per `docs/REPORT_MAPPING.md` (segmentMethodology, collectivelyEvaluatedByMethodology, quantitativeLossRatesBySegment, netChargeOffsQuarterly, qualitativeReservesBySegment, macroeconomicBaseline from macroEconomicVariableInput, individualAnalysis, unfundedBySegment, unfundedTrend; parametersInventory/peerRatios/hanmiSummaryMetrics stubbed).
-   - analysisDetails (iosession.py): For each analysis ID, download `export/analysisidentifier={id}/analysisDetails.json` (bucket root) into report dir as `analysisDetails_{id}.json` (done in getSourceInputFiles after parquet download).
+   - analysisDetails (iosession.py): For each analysis ID, download `export/analysisidentifier={id}/analysisDetails.json` into report dir as `analysisDetails_{id}.json` (getSourceInputFiles, with category CSVs).
    - create_report_export_zip() (Step 4): Zips all files in report dir (including `hanmi_acl_quarterly_report.json`) into `report_dir/report_export.zip`; zip is then uploaded with the rest of the report output.
 
 5. Tests  
@@ -59,9 +56,9 @@ Compact context for agents. See README.md for full project layout.
 
 | Where | What |
 |-------|------|
-| iosession.py | `OUTPUT_ROOT_BASE = "output"`, `SCENARIO_SUMMARY_SEGMENT = "scenarioidentifier=Summary"`, `EXPORT_BASE = "export"` (for analysisDetails) |
-| iosession | `_list_s3_at_prefix()`, `_get_s3_object_keys()` for listing; `_downloadFile()` uses Cappy |
-| model.py | `build_quarterly_summary_report()` (Step 3); `_load_parquet_for_analysis()`, `_find_column()`, `_filter_summary_scenario()`, `_safe_sum()` |
+| iosession.py | `EXPORT_BASE = "export"` (primary CSV + analysisDetails); `OUTPUT_ROOT_BASE` / `SCENARIO_SUMMARY_SEGMENT` kept for docs/legacy only |
+| iosession | Per-analysis download: fixed keys under `export/...`; `_downloadFile()` uses Cappy or boto3; listing helpers still used for diagnostics |
+| model.py | `build_quarterly_summary_report()` (Step 3); `_load_parquet_for_analysis()` (CSV preferred, parquet fallback), `_find_column()`, `_filter_summary_scenario()`, `_safe_sum()` |
 | Report dir | `io_session.local_directories['outputPaths']['report']` |
 | Datamodel | `datamodel/ImpairmentStudio-DataDictionary.csv` — Instrument Result: `analysisIdentifier`, `assetClass`, `lossAllowanceDelta` |
 | Column lookup | `docs/DATAMODEL_COLUMNS.md` — Report section → category → canonical attribute name. All report/debug lookups use `_resolve_column(df, canonical_name, *variants)` so parquet with lowercase/spaced column names still match. |
