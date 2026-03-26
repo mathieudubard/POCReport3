@@ -12,7 +12,6 @@ import requests
 import time
 from json import JSONDecodeError
 import urllib3
-import boto3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -103,6 +102,7 @@ class ModelRunParameters :
 
 class IOSession :
     def __init__(self, cap_session, s3_json_key, local_mode, credentials) :
+        self._cached_s3_client = None
         self.logger = logging.getLogger(__name__)
         self.local_mode = local_mode
         self.cap_session = cap_session
@@ -129,14 +129,23 @@ class IOSession :
         """
         return (not self.local_mode) or self.model_run_parameters.use_per_analysis_s3_download()
 
+    def _get_cached_s3_client(self):
+        """Reuse one boto3 S3 client per IOSession (same as list_objects_v2); better connection reuse for many GETs."""
+        if self._cached_s3_client is None:
+            self._cached_s3_client = self.cap_session.init_s3_client()
+        return self._cached_s3_client
+
+    def _s3_get_via_boto3_enabled(self):
+        """Tenant S3 object GET: use boto3 download_file (default) vs Cappy s3_download_file (per-file wrapper)."""
+        v = os.environ.get("HANMI_S3_DOWNLOAD_VIA_BOTO3", "1").strip().lower()
+        return v not in ("0", "false", "no", "off")
+
     def create_io_directories(self) :
         """Create local directories for every input/output/log directory in modelRunParameter.json settings"""
         local_directories = {'inputPath' : {}}
-        s3_client = boto3.client('s3')
-        s3_resource = boto3.resource('s3')
         bucket = self.cap_session.context['s3_bucket']
         key = self.model_run_parameters.input_s3_path
-        resp = self.cap_session.init_s3_client().list_objects_v2(Bucket=bucket, Prefix=key)
+        resp = self._get_cached_s3_client().list_objects_v2(Bucket=bucket, Prefix=key)
         cont = resp.get('Contents') or []  # empty prefix returns no 'Contents' key; optional payload files
         input_path_list = []  # This is to update the local mrp.json - a list of dicts of temp dir and file under each dir
         test_list = []  # This is the list of input files to be written to the actual mrp.json
@@ -203,7 +212,7 @@ class IOSession :
             self.logger.warning("No s3_bucket in cap_session context; cannot list S3.")
             return
         prefix = prefix or self.model_run_parameters.input_s3_path
-        client = self.cap_session.init_s3_client()
+        client = self._get_cached_s3_client()
         print(f"\n--- S3 bucket: {bucket}")
         print(f"--- Prefix: {prefix}\n")
         # List "folders" (common prefixes)
@@ -247,7 +256,7 @@ class IOSession :
         bucket = self.cap_session.context.get('s3_bucket')
         if not bucket:
             return False
-        client = self.cap_session.init_s3_client()
+        client = self._get_cached_s3_client()
         try:
             print(f"\n[S3 list] {label}")
             print(f"  Prefix: {prefix or '(bucket root)'}")
@@ -286,7 +295,7 @@ class IOSession :
             return []
         keys = []
         try:
-            client = self.cap_session.init_s3_client()
+            client = self._get_cached_s3_client()
             paginator = client.get_paginator('list_objects_v2')
             for page in paginator.paginate(Bucket=bucket, Prefix=prefix or '', MaxKeys=1000):
                 for obj in (page.get('Contents') or []):
@@ -319,7 +328,7 @@ class IOSession :
             _objects = []
         if _current_depth >= max_depth:
             return _folders, _objects
-        client = self.cap_session.init_s3_client()
+        client = self._get_cached_s3_client()
         prefix = (prefix or '').rstrip('/') + '/' if (prefix or '') else ''
         try:
             paginator = client.get_paginator('list_objects_v2')
@@ -364,9 +373,34 @@ class IOSession :
             print("  (none)")
         print("=" * 60 + "\n")
 
+    def _download_file_via_boto3(self, key, local_file_path):
+        """Return True if boto3 GetObject succeeded. On failure log and return False so caller can use Cappy."""
+        bucket = self.cap_session.context.get("s3_bucket")
+        if not bucket:
+            return False
+        parent = os.path.dirname(local_file_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        try:
+            self._get_cached_s3_client().download_file(bucket, key, local_file_path)
+            return True
+        except Exception as e:
+            self.logger.warning(
+                "[Cappy/S3] boto3 download_file failed key=%s -> %s: %s "
+                "(fallback: Cappy s3_download_file; or set HANMI_S3_DOWNLOAD_VIA_BOTO3=0 to skip boto3)",
+                key,
+                local_file_path,
+                e,
+            )
+            return False
+
     def _downloadFile(self, download_key, local_file_path, raise_on_error=False) :
         file_name = os.path.splitext(os.path.basename(local_file_path))[0]
         try :
+            if self._tenant_s3_inputs_enabled() and self._s3_get_via_boto3_enabled():
+                if self._download_file_via_boto3(download_key, local_file_path):
+                    self.logger.debug("[Cappy/S3] boto3 downloaded key=%s -> %s", download_key, local_file_path)
+                    return {file_name : local_file_path}
             self.cap_session.s3_download_file(download_key, local_file_path)
             self.logger.debug("[Cappy/S3] downloaded key=%s -> %s", download_key, local_file_path)
             return {file_name : local_file_path}
@@ -386,7 +420,8 @@ class IOSession :
     def _s3_download_batch(self, key_path_pairs):
         """
         Download many (s3_key, local_path) pairs. Uses ThreadPoolExecutor when tenant S3 is enabled.
-        Env HANMI_S3_DOWNLOAD_WORKERS (default 8); set to 1 for sequential if Cappy/thread issues appear.
+        Env HANMI_S3_DOWNLOAD_WORKERS (default 1): one Cappy session is shared across workers, so high
+        concurrency often hurts (contention, throttling). Raise to 2–4 only after measuring; avoid 8+ unless proven.
         """
         if not key_path_pairs:
             return
@@ -394,7 +429,7 @@ class IOSession :
             for sk, lp in key_path_pairs:
                 self._safeCopyFile(sk, lp)
             return
-        workers = int(os.environ.get("HANMI_S3_DOWNLOAD_WORKERS", "8"))
+        workers = int(os.environ.get("HANMI_S3_DOWNLOAD_WORKERS", "1"))
         if workers < 1:
             workers = 1
         if workers == 1:
@@ -679,12 +714,15 @@ class IOSession :
             )
             self.logger.info(_s3_probe)
             print(_s3_probe)
-            _dw = int(os.environ.get("HANMI_S3_DOWNLOAD_WORKERS", "8"))
+            _dw = int(os.environ.get("HANMI_S3_DOWNLOAD_WORKERS", "1"))
             if _dw < 1:
                 _dw = 1
+            _boto_get = self._s3_get_via_boto3_enabled()
             print(
-                "[getSourceInputFiles] S3 download workers={} (env HANMI_S3_DOWNLOAD_WORKERS; use 1 to force sequential)".format(
-                    _dw
+                "[getSourceInputFiles] S3 GET via_boto3={} workers={} "
+                "(HANMI_S3_DOWNLOAD_VIA_BOTO3=1 uses init_s3_client download_file; WORKERS=1 sequential)".format(
+                    _boto_get,
+                    _dw,
                 )
             )
 
@@ -727,13 +765,17 @@ class IOSession :
                     )
                 batch = []
                 for s3_key in parquet_keys:
-                    local_path = os.path.join(local_dir, os.path.basename(s3_key))
+                    # Preserve subpath (e.g. adjusted=true/part-....parquet) so part files in different folders do not overwrite.
+                    rel = s3_key[len(prefix):] if s3_key.startswith(prefix) else os.path.basename(s3_key)
+                    local_path = os.path.join(local_dir, rel.replace("/", os.sep))
                     os.makedirs(os.path.dirname(local_path), exist_ok=True)
                     batch.append((s3_key, local_path))
                 self._s3_download_batch(batch)
                 for s3_key in parquet_keys:
-                    local_path = os.path.join(local_dir, os.path.basename(s3_key))
-                    input_files.update({os.path.splitext(os.path.basename(s3_key))[0]: local_path})
+                    rel = s3_key[len(prefix):] if s3_key.startswith(prefix) else os.path.basename(s3_key)
+                    local_path = os.path.join(local_dir, rel.replace("/", os.sep))
+                    dict_key = os.path.splitext(rel.replace("\\", "__").replace("/", "__"))[0]
+                    input_files.update({dict_key: local_path})
 
             # Download instrumentReporting: output/instrumentReporting/analysisidentifier={id}/ (parquet files directly under, no extra partition)
             instrument_reporting_paths = source_input_directory.get("instrumentReporting") or []
@@ -757,7 +799,8 @@ class IOSession :
                     )
                 batch = []
                 for s3_key in parquet_keys:
-                    local_path = os.path.join(local_dir, os.path.basename(s3_key))
+                    rel = s3_key[len(prefix):] if s3_key.startswith(prefix) else os.path.basename(s3_key)
+                    local_path = os.path.join(local_dir, rel.replace("/", os.sep))
                     os.makedirs(os.path.dirname(local_path), exist_ok=True)
                     batch.append((s3_key, local_path))
                 self._s3_download_batch(batch)
@@ -821,9 +864,26 @@ class IOSession :
             scenario_asof_date = self._get_macro_scenario_date_from_analysis_details(report_dir, main_analysis_id)
             if not scenario_asof_date:
                 print("[getSourceInputFiles] macro: no asOfDate from analysisDetails (will try default path)")
+            # Hanmi ACL loads macro only for the current analysis (_load_parquet_for_analysis(..., current_id)).
+            # Same macro dataset was previously downloaded once per analysis index — duplicate GETs.
+            macro_target_idx = 0
+            for _mi, _maid in enumerate(analysis_ids or []):
+                if str(_maid) == str(main_analysis_id):
+                    macro_target_idx = _mi
+                    break
+            if analysis_ids and macro_paths:
+                print(
+                    "[getSourceInputFiles] macro: fetching parquet only for analysis index {} "
+                    "(main/current analysisId={}; not repeated for prior/additional analyses)".format(
+                        macro_target_idx,
+                        main_analysis_id,
+                    )
+                )
             for idx, aid in enumerate(analysis_ids or []):
                 if idx >= len(macro_paths):
                     break
+                if idx != macro_target_idx:
+                    continue
                 local_dir = macro_paths[idx]
                 os.makedirs(local_dir, exist_ok=True)
                 if self._tenant_s3_inputs_enabled():

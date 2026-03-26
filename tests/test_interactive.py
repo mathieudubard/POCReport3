@@ -2,8 +2,9 @@
 
 import os
 import sys
+import tempfile
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
@@ -88,11 +89,36 @@ class TestTenantS3WithLocalMrp(unittest.TestCase):
         paginator.paginate.return_value = [
             {"Contents": [{"Key": "output/instrumentResult/analysisidentifier=4647997/scenarioidentifier=Summary/a.parquet"}]}
         ]
+        io._cached_s3_client = None
         io.cap_session.init_s3_client.return_value = mock_client
         keys = io._get_s3_object_keys("output/instrumentResult/analysisidentifier=4647997/scenarioidentifier=Summary/")
         self.assertEqual(len(keys), 1)
         self.assertTrue(keys[0].endswith(".parquet"))
         mock_client.get_paginator.assert_called_once_with("list_objects_v2")
+
+    def test_download_file_uses_boto3_when_tenant_live(self):
+        io = self._io_stub(True, build_interactive_mrp(["4647997"]))
+        io._cached_s3_client = None
+        mock_client = MagicMock()
+        io.cap_session.init_s3_client.return_value = mock_client
+        with patch.dict(os.environ, {"HANMI_S3_DOWNLOAD_VIA_BOTO3": "1"}, clear=False):
+            with tempfile.TemporaryDirectory() as td:
+                path = os.path.join(td, "sub", "a.parquet")
+                io._downloadFile("output/x/a.parquet", path)
+        mock_client.download_file.assert_called_once_with("tenant-bucket", "output/x/a.parquet", path)
+        io.cap_session.s3_download_file.assert_not_called()
+
+    def test_download_file_skips_boto3_when_env_off(self):
+        io = self._io_stub(True, build_interactive_mrp(["4647997"]))
+        io._cached_s3_client = None
+        mock_client = MagicMock()
+        io.cap_session.init_s3_client.return_value = mock_client
+        with patch.dict(os.environ, {"HANMI_S3_DOWNLOAD_VIA_BOTO3": "0"}, clear=False):
+            with tempfile.TemporaryDirectory() as td:
+                path = os.path.join(td, "b.parquet")
+                io._downloadFile("output/x/b.parquet", path)
+        mock_client.download_file.assert_not_called()
+        io.cap_session.s3_download_file.assert_called_once_with("output/x/b.parquet", path)
 
 
 if __name__ == "__main__":
